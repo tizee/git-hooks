@@ -57,19 +57,23 @@ spinner() {
 # Start spinner
 spinner &
 SPIN_PID=$!
-trap "kill -9 $SPIN_PID >/dev/null 2>&1 || true" EXIT
 
 # Generate message (POSIX-compliant subshell)
 DIFF_CONTENT=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=minimal)
-MSG=$(echo "$DIFF_CONTENT" | llm -m deepseek-chat -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" | iconv -c -f UTF-8 -t UTF-8)
+if ! MSG=$(echo "$DIFF_CONTENT" | llm -m deepseek-chat -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" | iconv -c -f UTF-8 -t UTF-8  2>&1); then
+  kill -9 $SPIN_PID >/dev/null 2>&1 || true
+  wait $SPIN_PID 2>/dev/null
+  printf "\n${RED}Error: 'llm' command failed to generate the commit message:\\n${MSG}${NC}\\n\\nManually set the commit message"
+  exit 1
+fi
 
-# Cleanup spinner
-kill -9 $SPIN_PID >/dev/null 2>&1 || true
 # clear line
 printf "\r\033[K"
+kill -9 $SPIN_PID >/dev/null 2>&1 || true
+wait $SPIN_PID 2>/dev/null
 
 printf "%bGenerated commit message:%b\n" "$GREEN" "$NC"
-printf "%b%s%b\n\n" "$YELLOW" "$MSG" "$NC" 
+printf "%b%s%b\n\n" "$YELLOW" "$MSG" "$NC"
 
 # Write output
 echo "$MSG" > "$COMMIT_MSG_FILE"
