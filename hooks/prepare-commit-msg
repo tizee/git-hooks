@@ -57,14 +57,15 @@ spinner() {
 # Start spinner
 spinner &
 SPIN_PID=$!
-trap "kill -9 $SPIN_PID 2>/dev/null" EXIT
+trap "kill -9 $SPIN_PID >/dev/null 2>&1 || true" EXIT
 
 # Generate message (POSIX-compliant subshell)
 DIFF_CONTENT=$(git diff --staged --no-color)
 MSG=$(echo "$DIFF_CONTENT" | llm -m deepseek-chat -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" | iconv -c -f UTF-8 -t UTF-8)
 
 # Cleanup spinner
-kill -9 $SPIN_PID 2>/dev/null
+kill -9 $SPIN_PID >/dev/null 2>&1 || true
+# clear line
 printf "\r\033[K"
 
 printf "%bGenerated commit message:%b\n" "$GREEN" "$NC"
