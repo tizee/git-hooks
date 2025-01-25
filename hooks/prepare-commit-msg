@@ -60,7 +60,7 @@ SPIN_PID=$!
 trap "kill -9 $SPIN_PID >/dev/null 2>&1 || true" EXIT
 
 # Generate message (POSIX-compliant subshell)
-DIFF_CONTENT=$(git diff --staged --no-color)
+DIFF_CONTENT=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=minimal)
 MSG=$(echo "$DIFF_CONTENT" | llm -m deepseek-chat -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" | iconv -c -f UTF-8 -t UTF-8)
 
 # Cleanup spinner
