@@ -1,0 +1,78 @@
+#!/bin/sh
+# Universal .git/hooks/prepare-commit-msg
+
+# Force UTF-8 environment (critical for Windows)
+export LC_ALL=en_US.UTF-8
+export LANG=en_US.UTF-8
+export PYTHONIOENCODING=utf-8  # If using Python-based llm
+
+# ANSI colors (works in Git Bash and modern terminals)
+RED=$(printf '\033[31m')
+GREEN=$(printf '\033[32m')
+YELLOW=$(printf '\033[33m')
+BLUE=$(printf '\033[34m')
+NC=$(printf '\033[0m')
+
+COMMIT_MSG_FILE=$1  # POSIX-compliant parameter handling
+
+# Feature 2: Skip if env var exists
+[ -n "$SKIP_LLM_GITHOOK" ] && exit 0
+
+# Feature 3: Merge commit detection (works cross-platform)
+if [ "$2" = "merge" ] || [ -f "$GIT_DIR/MERGE_HEAD" ]; then
+  exit 0
+fi
+
+# Feature 4: LLM detection with Windows support
+check_llm() {
+  case "$(uname -s)" in
+    Linux*|Darwin*)
+      command -v llm >/dev/null 2>&1
+      ;;
+    CYGWIN*|MINGW*|MSYS*)
+      where llm >/dev/null 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+if ! check_llm; then
+  printf "%bError: llm command not found%b\n" "$RED" "$NC" >&2
+  exit 1
+fi
+
+# Feature 1: Universal spinner
+spinner() {
+  spinner_chars="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+  while :; do
+    for i in $(seq 0 9); do
+      printf "%b\r%s Generating commit message...%b" "$YELLOW" "${spinner_chars:$i:1}" "$NC"
+      sleep 0.1
+    done
+  done
+}
+
+# Start spinner
+spinner &
+SPIN_PID=$!
+trap "kill -9 $SPIN_PID 2>/dev/null" EXIT
+
+# Generate message (POSIX-compliant subshell)
+DIFF_CONTENT=$(git diff --staged --no-color)
+MSG=$(echo "$DIFF_CONTENT" | llm -m deepseek-chat -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" | iconv -c -f UTF-8 -t UTF-8)
+
+# Cleanup spinner
+kill -9 $SPIN_PID 2>/dev/null
+printf "\r\033[K"
+
+# Feature 5/6: Color formatting with sed fallback
+colorized_msg=$(echo "$MSG" | \
+  sed -e "s/^\([a-z]*\):/${GREEN}\1${NC}:/" \
+      -e "s/^\([a-z]*\)\[.*]:/${GREEN}\1${NC}:/" \
+      -e "s/^\([^<]*\)$/${BLUE}\1${NC}/")
+
+# Feature 7: Write output
+echo "$MSG" > "$COMMIT_MSG_FILE"
+printf "%bGenerated commit message:%b\n%s\n" "$GREEN" "$NC" "$colorized_msg"
