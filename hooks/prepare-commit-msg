@@ -67,7 +67,8 @@ MSG=$(echo "$DIFF_CONTENT" | llm -m deepseek-chat -s "$(cat ~/prompts/git/diff-b
 kill -9 $SPIN_PID 2>/dev/null
 printf "\r\033[K"
 
-printf "%bGenerated commit message:%b\n%s\n" "$GREEN" "$NC" "$MSG"
+printf "%bGenerated commit message:%b\n" "$GREEN" "$NC"
+printf "%b%s%b\n\n" "$YELLOW" "$MSG" "$NC" 
 
 # Write output
 echo "$MSG" > "$COMMIT_MSG_FILE"
