@@ -60,11 +60,22 @@ SPIN_PID=$!
 
 # Generate message (POSIX-compliant subshell)
 DIFF_CONTENT=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=minimal)
-if ! MSG=$(echo "$DIFF_CONTENT" | llm -m deepseek-chat -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" | iconv -c -f UTF-8 -t UTF-8  2>&1); then
-  kill -9 $SPIN_PID >/dev/null 2>&1 || true
-  wait $SPIN_PID 2>/dev/null
-  printf "\n${RED}Error: 'llm' command failed to generate the commit message:\\n${MSG}${NC}\\n\\nManually set the commit message"
-  exit 1
+
+# Check if the 'commit-msg' template exists, and create it if it does not
+if ! llm templates show commit-msg &> /dev/null; then
+    # Save the content of 'diff-based-commit-prompt.txt' as the 'commit-msg' template
+    llm -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" --save commit-msg
+fi
+
+# Generate the commit message using the 'commit-msg' template
+if ! MSG=$(echo "$DIFF_CONTENT" | llm -m deepseek-chat -t commit-msg | iconv -c -f UTF-8 -t UTF-8 2>&1); then
+    # If the 'llm' command fails, kill the spinner process and wait for it to terminate
+    kill -9 $SPIN_PID &> /dev/null || true
+    wait $SPIN_PID &> /dev/null
+    
+    # Print an error message and exit with a non-zero status
+    printf "\n${RED}Error: 'llm' command failed to generate the commit message:\\n${MSG}${NC}\\n\\nManually set the commit message"
+    exit 1
 fi
 
 # clear line
