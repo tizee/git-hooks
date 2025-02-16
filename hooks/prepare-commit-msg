@@ -4,9 +4,9 @@
 # Force UTF-8 environment (critical for Windows)
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
-export PYTHONIOENCODING=utf-8  # If using Python-based llm
+export PYTHONIOENCODING=utf-8  # If using Python-based LLM
 
-# ANSI colors (works in Git Bash and modern terminals)
+# ANSI colors for output formatting
 RED=$(printf '\033[31m')
 GREEN=$(printf '\033[32m')
 YELLOW=$(printf '\033[33m')
@@ -15,26 +15,18 @@ NC=$(printf '\033[0m')
 
 COMMIT_MSG_FILE=$1  # POSIX-compliant parameter handling
 
-# Skip if env var exists
+# Skip if environment variable is set
 [ -n "$SKIP_LLM_GITHOOK" ] && exit 0
 
-# Merge commit detection (works cross-platform)
-if [ "$2" = "merge" ] || [ -f "$GIT_DIR/MERGE_HEAD" ]; then
-  exit 0
-fi
+# Exit early for merge commits
+[ "$2" = "merge" ] || [ -f "$GIT_DIR/MERGE_HEAD" ] && exit 0
 
-# LLM detection with Windows support
+# Function to check if `llm` is installed (with Windows support)
 check_llm() {
   case "$(uname -s)" in
-    Linux*|Darwin*)
-      command -v llm >/dev/null 2>&1
-      ;;
-    CYGWIN*|MINGW*|MSYS*)
-      where llm >/dev/null 2>&1
-      ;;
-    *)
-      return 1
-      ;;
+    Linux*|Darwin*) command -v llm >/dev/null 2>&1 ;;
+    CYGWIN*|MINGW*|MSYS*) where llm >/dev/null 2>&1 ;;
+    *) return 1 ;;
   esac
 }
 
@@ -43,48 +35,55 @@ if ! check_llm; then
   exit 1
 fi
 
-# spinner animation
+# Function to show a spinner while fetching LLM response
 spinner() {
-  spinner_chars="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+  local spinner_chars="|/-\\"
   while :; do
-    for i in $(seq 0 9); do
-      printf "%b\r%s Generating commit message...%b" "$YELLOW" "${spinner_chars:$i:1}" "$NC"
+    for char in $(echo "$spinner_chars" | sed -e 's/\(.\)/\1\n/g'); do
+      printf "\r%b%s Generating commit message...%b" "$YELLOW" "$char" "$NC"
       sleep 0.1
     done
   done
 }
 
-# Start spinner
+# Hide cursor to prevent blinking while fetching response
+hide_cursor() { printf '\033[?25l'; }
+show_cursor() { printf '\033[?25h'; }
+
+# Start spinner in the background
+hide_cursor
 spinner &
 SPIN_PID=$!
 
-# Generate message (POSIX-compliant subshell)
+# Ensure the spinner and cursor are restored on exit
+cleanup() {
+  kill -9 $SPIN_PID 2>/dev/null || true
+  wait $SPIN_PID 2>/dev/null
+  show_cursor
+}
+trap cleanup EXIT
+
+# Fetch staged diff content
 DIFF_CONTENT=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=minimal)
 
-# Check if the 'commit-msg' template exists, and create it if it does not
+# Check if the 'commit-msg' template exists, create if missing
 if ! llm templates show commit-msg &> /dev/null; then
-    # Save the content of 'diff-based-commit-prompt.txt' as the 'commit-msg' template
-    llm -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" --save commit-msg
+  llm -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" --save commit-msg
 fi
 
-# Generate the commit message using the 'commit-msg' template with llm default model
+# Generate commit message with LLM
 if ! MSG=$(echo "$DIFF_CONTENT" | llm -t commit-msg | iconv -c -f UTF-8 -t UTF-8 2>&1); then
-    # If the 'llm' command fails, kill the spinner process and wait for it to terminate
-    kill -9 $SPIN_PID &> /dev/null || true
-    wait $SPIN_PID &> /dev/null
-
-    # Print an error message and exit with a non-zero status
-    printf "\n${RED}Error: 'llm' command failed to generate the commit message:\\n${MSG}${NC}\\n\\nManually set the commit message"
-    exit 1
+  printf "\n%bError: 'llm' command failed to generate the commit message:\n%b%s%b\n\nManually set the commit message.\n" "$RED" "$NC" "$MSG" "$NC"
+  exit 1
 fi
 
-# clear line
-printf "\r\033[K"
-kill -9 $SPIN_PID >/dev/null 2>&1 || true
-wait $SPIN_PID 2>/dev/null
+# Stop spinner and restore cursor
+cleanup
 
+# Display generated commit message
+printf "\r\033[K"
 printf "%bGenerated commit message:%b\n" "$GREEN" "$NC"
 printf "%b%s%b\n\n" "$YELLOW" "$MSG" "$NC"
 
-# Write output
+# Write output to commit message file
 echo "$MSG" > "$COMMIT_MSG_FILE"
