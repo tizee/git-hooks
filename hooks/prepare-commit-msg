@@ -25,12 +25,13 @@ COMMIT_MSG_FILE=$1  # POSIX-compliant parameter handling
 check_llm() {
   case "$(uname -s)" in
     Linux*|Darwin*) command -v llm >/dev/null 2>&1 ;;
-    CYGWIN*|MINGW*|MSYS*) where llm >/dev/null 2>&1 ;;
+    CYGWIN*|MINGW*|MSYS*) [ -f "$LLM_PROGRAM" ] && return 0 || return 1;;
     *) return 1 ;;
   esac
 }
 
 if ! check_llm; then
+  printf "%bError: $LLM_PROGRAM command not found%b\n" "$RED" "$NC" >&2
   printf "%bError: llm command not found%b\n" "$RED" "$NC" >&2
   exit 1
 fi
@@ -67,12 +68,12 @@ trap cleanup EXIT
 DIFF_CONTENT=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=minimal)
 
 # Check if the 'commit-msg' template exists, create if missing
-if ! llm templates show commit-msg &> /dev/null; then
-  llm -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" --save commit-msg
+if ! $LLM_PROGRAM templates show commit-msg &> /dev/null; then
+  $LLM_PROGRAM -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" --save commit-msg
 fi
 
 # Generate commit message with LLM
-if ! MSG=$(echo "$DIFF_CONTENT" | llm -t commit-msg | iconv -c -f UTF-8 -t UTF-8 2>&1); then
+if ! MSG=$(echo "$DIFF_CONTENT" | $LLM_PROGRAM -t commit-msg | iconv -c -f UTF-8 -t UTF-8 2>&1); then
   printf "\n%bError: 'llm' command failed to generate the commit message:\n%b%s%b\n\nManually set the commit message.\n" "$RED" "$NC" "$MSG" "$NC"
   exit 1
 fi
