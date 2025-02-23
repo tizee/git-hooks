@@ -8,7 +8,7 @@ patterns=(
   "AKIA[0-9A-Z]{16}"  # AWS keys
   "AIza[0-9A-Za-z_-]{35}"  # Google API keys
   "sk_live_[0-9a-zA-Z]{24}"  # Stripe secret keys
-  "-----BEGIN (RSA|EC) PRIVATE KEY-----"  # Private keys
+  "-----BEGIN \(RSA\|EC\) PRIVATE KEY-----"  # Private keys (escaped parentheses)
   "password\s*=\s*['\"][^'\"]+['\"]"  # Common password assignment
   "token\s*=\s*['\"][^'\"]+['\"]"  # Token assignment
   "Authorization:\s*Bearer\s+[0-9a-zA-Z_-]+"  # Bearer tokens
@@ -23,7 +23,7 @@ commit_diff=$(git diff --cached)
 
 # Use egrep for extended regex compatibility (works across systems)
 for pattern in "${patterns[@]}"; do
-  if echo "$commit_diff" | egrep -q "$pattern"; then
+  if echo "$commit_diff" | grep -E -q "$pattern"; then
     # If a match is found, reject the commit and notify the user
     echo "ERROR: Possible credential leak detected!" >&2
     echo "Pattern match: $pattern" >&2
