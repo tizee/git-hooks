@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# Pre-commit hook to detect credential leaks (API keys, tokens, passwords)
+# Compatible with Unix-like systems: Unix/Linux/macOS
+
+# Define patterns that may represent sensitive information (tokens, passwords, API keys)
+patterns=(
+  "AKIA[0-9A-Z]{16}"  # AWS keys
+  "AIza[0-9A-Za-z_-]{35}"  # Google API keys
+  "sk_live_[0-9a-zA-Z]{24}"  # Stripe secret keys
+  "-----BEGIN (RSA|EC) PRIVATE KEY-----"  # Private keys
+  "password\s*=\s*['\"][^'\"]+['\"]"  # Common password assignment
+  "token\s*=\s*['\"][^'\"]+['\"]"  # Token assignment
+  "Authorization:\s*Bearer\s+[0-9a-zA-Z_-]+"  # Bearer tokens
+  "^[A-Za-z0-9_-]{20,}$"  # Generic token pattern (e.g., Firebase tokens)
+  # see git-secrets
+  "(A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}"  # AWS Access Keys (extended)
+  "(aws|AWS)?_?(SECRET|secret)?_?ACCESS?_?KEY[_=]?[A-Za-z0-9/\+=]{40}"  # AWS Secret Key pattern
+  "[0-9]{12}-[0-9]{12}-[0-9]{12}"  # AWS account ID (or other common patterns)
+)
+
+# Check the commit diff for any patterns
+commit_diff=$(git diff --cached)
+
+# Iterate through each pattern and check if it exists in the commit diff
+for pattern in "${patterns[@]}"; do
+  if echo "$commit_diff" | grep -Eq "$pattern"; then
+    # If a match is found, reject the commit and notify the user
+    echo "ERROR: Possible credential leak detected!" >&2
+    echo "Pattern match: $pattern" >&2
+    echo "Please remove sensitive information from the commit before proceeding." >&2
+    exit 1
+  fi
+done
+
+# If no leaks are detected, allow the commit to proceed
+exit 0
+
