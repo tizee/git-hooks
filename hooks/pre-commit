@@ -3,12 +3,19 @@
 # Pre-commit hook to detect credential leaks (API keys, tokens, passwords)
 # Compatible with Unix-like systems: Unix/Linux/macOS
 
+# Check if the environment variable DISABLE_SECRET_SCAN is set
+if [ -n "$SKIP_SCAN_GITHOOK" ]; then
+  echo "Skipping secret scan due to SKIP_SCAN_GITHOOK environment variable."
+  exit 0
+fi
+
 # Define patterns that may represent sensitive information (tokens, passwords, API keys)
 patterns=(
   "AKIA[0-9A-Z]{16}"  # AWS keys
   "AIza[0-9A-Za-z_-]{35}"  # Google API keys
   "sk_live_[0-9a-zA-Z]{24}"  # Stripe secret keys
-  "-----BEGIN \(RSA\|EC\) PRIVATE KEY-----"  # Private keys (escaped parentheses)
+  "-----BEGIN RSA PRIVATE KEY-----"  # RSA Private keys
+  "-----BEGIN EC PRIVATE KEY-----"  # EC Private keys
   "password\s*=\s*['\"][^'\"]+['\"]"  # Common password assignment
   "token\s*=\s*['\"][^'\"]+['\"]"  # Token assignment
   "Authorization:\s*Bearer\s+[0-9a-zA-Z_-]+"  # Bearer tokens
@@ -21,9 +28,9 @@ patterns=(
 # Check the commit diff for any patterns
 commit_diff=$(git diff --cached)
 
-# Use egrep for extended regex compatibility (works across systems)
+# Use grep -E for extended regex compatibility (works across systems)
 for pattern in "${patterns[@]}"; do
-  if echo "$commit_diff" | grep -E -q "$pattern"; then
+  if echo "$commit_diff" | grep -E -q -- "$pattern"; then
     # If a match is found, reject the commit and notify the user
     echo "ERROR: Possible credential leak detected!" >&2
     echo "Pattern match: $pattern" >&2
