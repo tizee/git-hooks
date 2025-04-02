@@ -1,6 +1,15 @@
 #!/bin/sh
 # Universal .git/hooks/prepare-commit-msg
 
+# $1 is the path to the commit message file
+# $2 is the type of commit
+
+# Skip LLM processing if we're amending AND no_bypass_amending is not set
+if [ "$2" = "commit" ] && git rev-parse --verify HEAD^{commit} >/dev/null 2>&1 && [ -z "$NO_BYPASS_AMENDING" ]; then
+    # We're amending - exit without modifying the message
+    exit 0
+fi
+
 # Force UTF-8 environment (critical for Windows)
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
