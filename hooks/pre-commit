@@ -39,6 +39,23 @@ for pattern in "${patterns[@]}"; do
   fi
 done
 
+
+# pre-commit: 自动格式化所有已暂存的 C/C++ 文件
+changed_files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(mm|m|c|h|cpp|hpp|cc|cxx)$')
+if [ -z "$changed_files" ]; then
+    exit 0
+fi
+
+echo "Running clang-format on:"
+echo "$changed_files"
+
+for file in $changed_files; do
+    # clang-format 会直接格式化文件
+    clang-format -i "$file"
+    # 重新添加到暂存区
+    git add "$file"
+done
+
 # If no leaks are detected, allow the commit to proceed
 exit 0
 
