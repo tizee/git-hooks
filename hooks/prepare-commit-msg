@@ -95,5 +95,14 @@ printf "\r\033[K"
 printf "%bGenerated commit message:%b\n" "$GREEN" "$NC"
 printf "%b%s%b\n\n" "$YELLOW" "$MSG" "$NC"
 
-# Write output to commit message file
-echo "$MSG" > "$COMMIT_MSG_FILE"
+# Get user email from git config and AI model info
+USER_EMAIL=$(git config --global --get user.email)
+AI_MODEL=$(llm models default 2>/dev/null || echo "AI")
+
+# Write output to commit message file with signed-off-by and co-authored-by footers
+{
+  echo "$MSG"
+  echo ""
+  echo "Signed-off-by: $USER_EMAIL"
+  echo "Co-Authored-By: $AI_MODEL <noreply@AI>"
+} > "$COMMIT_MSG_FILE"
