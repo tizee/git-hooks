@@ -45,6 +45,11 @@ if ! check_llm; then
   exit 1
 fi
 
+if ! [ -f "$LLM_PROGRAM" ]; then
+  printf "%bError: $LLM_PREPARE_COMMIT_MSG_PROMPT file not found%b\n" "$RED" "$NC" >&2
+  exit 1
+fi
+
 # Function to show a spinner while fetching LLM response
 spinner() {
   local spinner_chars="|/-\\"
@@ -78,7 +83,7 @@ DIFF_CONTENT=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=
 
 # Check if the 'commit-msg' template exists, create if missing
 if ! $LLM_PROGRAM templates show commit-msg &> /dev/null; then
-  $LLM_PROGRAM -s "$(cat ~/prompts/git/diff-based-commit-prompt.txt)" --save commit-msg
+  $LLM_PROGRAM -s "$(cat $LLM_PREPARE_COMMIT_MSG_PROMPT)" --save commit-msg
 fi
 
 # Generate commit message with LLM
@@ -95,9 +100,23 @@ printf "\r\033[K"
 printf "%bGenerated commit message:%b\n" "$GREEN" "$NC"
 printf "%b%s%b\n\n" "$YELLOW" "$MSG" "$NC"
 
+# Strict model name mapping without explanations
+map_llm_model_name() {
+    case $1 in
+        "doubao-v3") echo "deepseek-v3" ;;
+        "doubao-r1") echo "deepseek-r1" ;;
+        "siliconflow-r1") echo "deepseek-r1" ;;
+        "siliconflow-v3") echo "deepseek-v3" ;;
+        "hyperbolic-v3") echo "deepseek-v3" ;;
+        "deepseek-chat") echo "deepseek-v3" ;;
+        "deepseek-reasoner") echo "deepseek-r1" ;;
+        *) echo "$1" ;;  # Fallthrough for unmapped names
+    esac
+}
+
 # Get user email from git config and AI model info
 USER_EMAIL=$(git config --global --get user.email)
-AI_MODEL=$(map_model "$(llm models default 2>/dev/null || echo "AI")")
+AI_MODEL=$(map_llm_model_name "$(llm models default 2>/dev/null || echo "AI")")
 
 # Write output to commit message file with signed-off-by and co-authored-by footers
 {
