@@ -52,7 +52,7 @@ fi
 
 # Function to show a spinner while fetching LLM response
 spinner() {
-  local spinner_chars="|/-\\"
+  spinner_chars="|/-\\"
   while :; do
     for char in $(echo "$spinner_chars" | sed -e 's/\(.\)/\1\n/g'); do
       printf "\r%b%s Generating commit message...%b" "$YELLOW" "$char" "$NC"
@@ -123,5 +123,5 @@ AI_MODEL=$(map_llm_model_name "$(llm models default 2>/dev/null || echo "AI")")
   echo "$MSG"
   echo ""
   echo "Signed-off-by: $USER_EMAIL"
-  echo "Co-Authored-By: $AI_MODEL <noreply@AI>"
+  echo "Co-Authored-By: $AI_MODEL <noreply@$AI_MODEL>"
 } > "$COMMIT_MSG_FILE"
