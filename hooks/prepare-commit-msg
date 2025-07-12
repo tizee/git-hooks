@@ -110,18 +110,66 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Fetch staged diff content
-DIFF_CONTENT=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=minimal)
+# Cache files for last commit message
+CACHE_DIR="$HOME/.cache/git-llm-prepare-commit-msg"
+CACHE_MD5_FILE="$CACHE_DIR/last_md5"
+CACHE_MSG_FILE="$CACHE_DIR/last_message"
 
-# Check if the 'commit-msg' template exists, create if missing
-if ! $LLM_PROGRAM templates show commit-msg &> /dev/null; then
-  $LLM_PROGRAM -s "$(cat $LLM_PREPARE_COMMIT_MSG_PROMPT)" --save commit-msg
+# Create cache directory
+mkdir -p "$CACHE_DIR"
+
+# Function to calculate MD5 for staged changes
+get_staged_md5() {
+  # Get the diff content and file list
+  local diff_content=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=minimal)
+  local files_list=$(git diff --staged --name-only | sort | tr '\n' ' ')
+  
+  # Create MD5 hash of diff content and file list
+  echo -n "$diff_content$files_list" | md5sum | cut -d' ' -f1
+}
+
+# Check if we should force regeneration
+if [ -n "$FORCE_LLM_GITHOOK" ]; then
+  printf "%bForcing commit message regeneration...%b\n" "$YELLOW" "$NC"
+  REGENERATE=true
+else
+  # Check if we have cached commit message
+  CURRENT_MD5=$(get_staged_md5)
+  if [ -f "$CACHE_MD5_FILE" ] && [ -f "$CACHE_MSG_FILE" ]; then
+    CACHED_MD5=$(cat "$CACHE_MD5_FILE")
+    CACHED_MSG=$(cat "$CACHE_MSG_FILE")
+    
+    # Check if staged changes match cached
+    if [ "$CURRENT_MD5" = "$CACHED_MD5" ]; then
+      MSG="$CACHED_MSG"
+      printf "%bUsing cached commit message...%b\n" "$YELLOW" "$NC"
+      REGENERATE=false
+    else
+      REGENERATE=true
+    fi
+  else
+    REGENERATE=true
+  fi
 fi
 
-# Generate commit message with LLM
-if ! MSG=$(echo "$DIFF_CONTENT" | $LLM_PROGRAM -t commit-msg | iconv -c -f UTF-8 -t UTF-8 2>&1); then
-  printf "\n%bError: 'llm' command failed to generate the commit message:\n%b%s%b\n\nManually set the commit message.\n" "$RED" "$NC" "$MSG" "$NC"
-  exit 1
+if [ "$REGENERATE" = true ]; then
+  # Fetch staged diff content
+  DIFF_CONTENT=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=minimal)
+
+  # Check if the 'commit-msg' template exists, create if missing
+  if ! $LLM_PROGRAM templates show commit-msg &> /dev/null; then
+    $LLM_PROGRAM -s "$(cat $LLM_PREPARE_COMMIT_MSG_PROMPT)" --save commit-msg
+  fi
+
+  # Generate commit message with LLM
+  if ! MSG=$(echo "$DIFF_CONTENT" | $LLM_PROGRAM -t commit-msg | iconv -c -f UTF-8 -t UTF-8 2>&1); then
+    printf "\n%bError: 'llm' command failed to generate the commit message:\n%b%s%b\n\nManually set the commit message.\n" "$RED" "$NC" "$MSG" "$NC"
+    exit 1
+  fi
+
+  # Cache the generated message and MD5
+  echo "$CURRENT_MD5" > "$CACHE_MD5_FILE"
+  echo "$MSG" > "$CACHE_MSG_FILE"
 fi
 
 # Stop spinner and restore cursor
