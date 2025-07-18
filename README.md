@@ -72,10 +72,14 @@ git config --global core.hooksPath "$HOOKS_REPO\hooks"
 - `DISABLE_SECRET_SCAN=1`: Alternative skip flag
 
 #### Prepare-commit-msg Hook
-- `SKIP_LLM_GITHOOK=1`: Skip AI commit message generation
-- `FORCE_LLM_GITHOOK=1`: Force regeneration even with unchanged diffs
-- `NO_BYPASS_AMENDING=1`: Prevent bypass during commit amending
-- `GITHOOK_SPINNER=dots`: Set spinner style (see available styles below)
+- `SKIP_LLM_GITHOOK=1`: Skip AI commit message generation entirely
+- `FORCE_LLM_GITHOOK=1`: Force regeneration even with cached/unmodified diffs
+- `NO_BYPASS_AMENDING=1`: Prevent bypass during commit amending (normally bypasses for amends)
+- `GITHOOK_SPINNER=style`: Set custom spinner style (see available styles below)
+- `SPINNER_STYLE=style`: Alternative spinner style variable (fallback to GITHOOK_SPINNER)
+- `LLM_PROGRAM`: Custom path to the `llm` executable (defaults to system `llm`)
+- `LLM_PREPARE_COMMIT_MSG_PROMPT`: Custom path to the prompt template file
+- `PYTHONIOENCODING=utf-8`: Force Python encoding (set automatically for Windows compatibility)
 
 ### Available Spinner Styles
 - `classic` (default): `|/-\`
@@ -88,6 +92,46 @@ git config --global core.hooksPath "$HOOKS_REPO\hooks"
 - `square`: `◰◳◲◱`
 - `triangle`: `◴◵◶◷`
 - `diamond`: `◇◈◆`
+
+### Advanced Environment Variables
+
+#### Custom LLM Configuration
+- **LLM_PROGRAM**: Override the default `llm` command path
+  ```bash
+  export LLM_PROGRAM="/usr/local/bin/llm-custom"
+  export LLM_PREPARE_COMMIT_MSG_PROMPT="$HOME/.config/git/commit-prompt.txt"
+  ```
+
+#### Spinner Customization
+- **GITHOOK_SPINNER**: Primary spinner style selector
+- **SPINNER_STYLE**: Fallback variable if GITHOOK_SPINNER is not set
+  ```bash
+  export GITHOOK_SPINNER="dots"
+  export SPINNER_STYLE="arrows"  # Used if GITHOOK_SPINNER is unset
+  ```
+
+#### Bypass and Control Variables
+- **SKIP_LLM_GITHOOK**: Complete bypass for AI generation
+- **FORCE_LLM_GITHOOK**: Override caching behavior
+- **NO_BYPASS_AMENDING**: Disable automatic bypass during amend operations
+  ```bash
+  # Skip AI for specific repositories
+  export SKIP_LLM_GITHOOK=1
+  
+  # Force regeneration for debugging
+  export FORCE_LLM_GITHOOK=1
+  
+  # Always run AI even when amending
+  export NO_BYPASS_AMENDING=1
+  ```
+
+#### Windows-Specific Variables
+- **PYTHONIOENCODING**: Force UTF-8 encoding (automatically set)
+- **LC_ALL/LANG**: Locale settings for proper encoding
+  ```bash
+  export LC_ALL=en_US.UTF-8
+  export LANG=en_US.UTF-8
+  ```
 
 ### Model Name Mapping
 The system automatically maps common model names for consistency:
