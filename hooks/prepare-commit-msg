@@ -45,7 +45,7 @@ if ! check_llm; then
   exit 1
 fi
 
-if ! [ -f "$LLM_PROGRAM" ]; then
+if ! [ -f "$LLM_PREPARE_COMMIT_MSG_PROMPT" ]; then
   printf "%bError: $LLM_PREPARE_COMMIT_MSG_PROMPT file not found%b\n" "$RED" "$NC" >&2
   exit 1
 fi
@@ -67,14 +67,14 @@ SPINNER_STYLES=(
 # Function to get spinner characters based on style
 get_spinner_chars() {
   local style_name="${1:-classic}"
-  
+
   for style in "${SPINNER_STYLES[@]}"; do
     if [[ "$style" == "$style_name"* ]]; then
       echo "$style" | cut -d'|' -f2
       return 0
     fi
   done
-  
+
   # Fallback to classic if style not found
   echo "|/-\\"
 }
@@ -83,7 +83,7 @@ get_spinner_chars() {
 spinner() {
   local style="${GITHOOK_SPINNER:-${SPINNER_STYLE:-classic}}"
   local spinner_chars=$(get_spinner_chars "$style")
-  
+
   while :; do
     for ((i=0; i<${#spinner_chars}; i++)); do
       local char="${spinner_chars:i:1}"
@@ -123,7 +123,7 @@ get_staged_md5() {
   # Get the diff content and file list
   local diff_content=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=minimal)
   local files_list=$(git diff --staged --name-only | sort | tr '\n' ' ')
-  
+
   # Create MD5 hash of diff content and file list
   echo -n "$diff_content$files_list" | md5sum | cut -d' ' -f1
 }
@@ -138,7 +138,7 @@ else
   if [ -f "$CACHE_MD5_FILE" ] && [ -f "$CACHE_MSG_FILE" ]; then
     CACHED_MD5=$(cat "$CACHE_MD5_FILE")
     CACHED_MSG=$(cat "$CACHE_MSG_FILE")
-    
+
     # Check if staged changes match cached
     if [ "$CURRENT_MD5" = "$CACHED_MD5" ]; then
       MSG="$CACHED_MSG"
