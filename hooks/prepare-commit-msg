@@ -4,12 +4,8 @@
 # $1 is the path to the commit message file
 # $2 is the type of commit
 
-# Normalize env flags to LLM_*-prefixed variants (old names still respected for backward compatibility)
-LLM_GITHOOK_NO_BYPASS_AMENDING=${LLM_GITHOOK_NO_BYPASS_AMENDING:-$NO_BYPASS_AMENDING}
-LLM_GITHOOK_FORCE=${LLM_GITHOOK_FORCE:-$FORCE_LLM_GITHOOK}
-LLM_GITHOOK_SKIP=${LLM_GITHOOK_SKIP:-$SKIP_LLM_GITHOOK}
-LLM_GITHOOK_SPINNER=${LLM_GITHOOK_SPINNER:-$GITHOOK_SPINNER}
-LLM_GITHOOK_SPINNER_STYLE=${LLM_GITHOOK_SPINNER_STYLE:-${LLM_SPINNER_STYLE:-$SPINNER_STYLE}}
+# Set default values for LLM hook environment variables
+LLM_GITHOOK_SPINNER_STYLE=${LLM_GITHOOK_SPINNER_STYLE:-classic}
 
 # Skip LLM processing if we're amending AND bypass is allowed (default)
 if [ "$2" = "commit" ] && git rev-parse --verify HEAD^{commit} >/dev/null 2>&1 && [ -z "$LLM_GITHOOK_NO_BYPASS_AMENDING" ]; then
@@ -102,7 +98,7 @@ get_spinner_chars() {
 
 # Function to show a spinner while fetching LLM response
 spinner() {
-  local style="${LLM_GITHOOK_SPINNER:-${LLM_GITHOOK_SPINNER_STYLE:-classic}}"
+  local style="${LLM_GITHOOK_SPINNER_STYLE:-classic}"
   local spinner_chars=$(get_spinner_chars "$style")
 
   while :; do

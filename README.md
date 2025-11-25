@@ -15,7 +15,11 @@ A sophisticated collection of git hooks designed to enhance security, code quali
 - **Smart Caching**: Caches commit messages based on staged changes to avoid regeneration
 - **Cross-platform**: Works on Unix, macOS, and Windows systems
 - **Visual Feedback**: Customizable spinner animations during message generation
-- **Safety Features**: Skip modes for amending commits and merge operations
+- **Safety Features**:
+  - Skip modes for amending commits and merge operations
+  - Automatic detection of non-interactive terminals (CI/agents)
+  - Rebase operation protection (prevents rewriting historical commit messages)
+  - Fallback to HEAD content when no staged changes present
 
 ## 📦 Installation
 
@@ -72,11 +76,11 @@ git config --global core.hooksPath "$HOOKS_REPO\hooks"
 - `DISABLE_SECRET_SCAN=1`: Alternative skip flag
 
 #### Prepare-commit-msg Hook
-- `SKIP_LLM_GITHOOK=1`: Skip AI commit message generation entirely
-- `FORCE_LLM_GITHOOK=1`: Force regeneration even with cached/unmodified diffs
-- `NO_BYPASS_AMENDING=1`: Prevent bypass during commit amending (normally bypasses for amends)
-- `GITHOOK_SPINNER=style`: Set custom spinner style (see available styles below)
-- `SPINNER_STYLE=style`: Alternative spinner style variable (fallback to GITHOOK_SPINNER)
+- `LLM_GITHOOK_SKIP=1`: Skip AI commit message generation entirely
+- `LLM_GITHOOK_FORCE=1`: Force regeneration even with cached/unmodified diffs
+- `LLM_GITHOOK_NO_BYPASS_AMENDING=1`: Prevent bypass during commit amending (normally bypasses for amends)
+- `LLM_GITHOOK_SPINNER_STYLE=style`: Set custom spinner style (defaults to `classic`, see available styles below)
+- `LLM_GITHOOK_ALLOW_NONINTERACTIVE=1`: Allow hook to run in non-interactive terminals (CI/agents)
 - `LLM_PROGRAM`: Custom path to the `llm` executable (defaults to system `llm`)
 - `LLM_PREPARE_COMMIT_MSG_PROMPT`: Custom path to the prompt template file
 - `PYTHONIOENCODING=utf-8`: Force Python encoding (set automatically for Windows compatibility)
@@ -103,27 +107,37 @@ git config --global core.hooksPath "$HOOKS_REPO\hooks"
   ```
 
 #### Spinner Customization
-- **GITHOOK_SPINNER**: Primary spinner style selector
-- **SPINNER_STYLE**: Fallback variable if GITHOOK_SPINNER is not set
+- **LLM_GITHOOK_SPINNER_STYLE**: Set spinner animation style (defaults to `classic`)
   ```bash
-  export GITHOOK_SPINNER="dots"
-  export SPINNER_STYLE="arrows"  # Used if GITHOOK_SPINNER is unset
+  # Set spinner style
+  export LLM_GITHOOK_SPINNER_STYLE="dots"
   ```
 
 #### Bypass and Control Variables
-- **SKIP_LLM_GITHOOK**: Complete bypass for AI generation
-- **FORCE_LLM_GITHOOK**: Override caching behavior
-- **NO_BYPASS_AMENDING**: Disable automatic bypass during amend operations
+- **LLM_GITHOOK_SKIP**: Complete bypass for AI generation
+- **LLM_GITHOOK_FORCE**: Override caching behavior
+- **LLM_GITHOOK_NO_BYPASS_AMENDING**: Disable automatic bypass during amend operations
+- **LLM_GITHOOK_ALLOW_NONINTERACTIVE**: Allow hook to run in non-interactive terminals (CI/agents)
   ```bash
   # Skip AI for specific repositories
-  export SKIP_LLM_GITHOOK=1
-  
+  export LLM_GITHOOK_SKIP=1
+
   # Force regeneration for debugging
-  export FORCE_LLM_GITHOOK=1
-  
+  export LLM_GITHOOK_FORCE=1
+
   # Always run AI even when amending
-  export NO_BYPASS_AMENDING=1
+  export LLM_GITHOOK_NO_BYPASS_AMENDING=1
+
+  # Allow running in CI/automation environments
+  export LLM_GITHOOK_ALLOW_NONINTERACTIVE=1
   ```
+
+#### Automatic Safety Features
+The hook automatically detects and skips execution in the following scenarios:
+- **Non-interactive terminals**: Automatically skips in CI/agent environments unless `LLM_GITHOOK_ALLOW_NONINTERACTIVE` is set
+- **Rebase operations**: Skips during `git rebase` to avoid rewriting historical commit messages
+- **Merge commits**: Skips for merge commits to preserve merge messages
+- **No staged changes**: Falls back to HEAD content when amending message-only commits
 
 #### Windows-Specific Variables
 - **PYTHONIOENCODING**: Force UTF-8 encoding (automatically set)
@@ -163,7 +177,7 @@ export SKIP_SCAN_GITHOOK=1
 ### Skip AI Message Generation
 ```bash
 # Use your own commit message
-SKIP_LLM_GITHOOK=1 git commit
+LLM_GITHOOK_SKIP=1 git commit
 
 # Bypass for amending
 git commit --amend
@@ -172,16 +186,22 @@ git commit --amend
 ### Force Regeneration
 ```bash
 # Regenerate even if changes are cached
-FORCE_LLM_GITHOOK=1 git commit --amend
+LLM_GITHOOK_FORCE=1 git commit --amend
 ```
 
 ### Custom Spinner Style
 ```bash
 # Use dots spinner
-GITHOOK_SPINNER=dots git commit
+LLM_GITHOOK_SPINNER_STYLE=dots git commit
 
 # Set permanently in your shell profile
-echo 'export GITHOOK_SPINNER=dots' >> ~/.zshrc
+echo 'export LLM_GITHOOK_SPINNER_STYLE=dots' >> ~/.zshrc
+```
+
+### Allow in CI/Automation
+```bash
+# Enable hook in non-interactive environments
+LLM_GITHOOK_ALLOW_NONINTERACTIVE=1 git commit
 ```
 
 ## 🛠️ Troubleshooting
@@ -213,7 +233,17 @@ clang-format --version
 #### Commit stuck on spinner
 - Check network connectivity for AI service
 - Verify AI model configuration: `llm models`
-- Skip AI generation: `SKIP_LLM_GITHOOK=1 git commit`
+- Skip AI generation: `LLM_GITHOOK_SKIP=1 git commit`
+
+#### Hook not running in CI/automation
+- The hook automatically skips in non-interactive terminals
+- To enable in CI: `export LLM_GITHOOK_ALLOW_NONINTERACTIVE=1`
+- Verify terminal interactivity: `test -t 0 && echo "interactive" || echo "non-interactive"`
+
+#### Hook not running during rebase
+- This is intentional to prevent rewriting historical commit messages
+- The hook automatically detects and skips rebase operations
+- Use `LLM_GITHOOK_FORCE=1` only if you specifically need to override this behavior
 
 #### False positive in security scan
 - Review the detected pattern in your code
@@ -254,6 +284,11 @@ echo "Generate a commit message for these changes focusing on: $CHANGES" | \
 Cached commit messages are stored in `~/.cache/git-llm-prepare-commit-msg/`:
 - `last_md5`: MD5 hash of staged changes
 - `last_message`: Cached commit message
+
+**Smart Content Detection:**
+- When staged changes are present, uses `git diff --staged` for message generation
+- When no staged changes exist (e.g., `git commit --amend` message-only edits), automatically falls back to HEAD content
+- Cache MD5 calculation adapts based on available content to ensure accurate cache hits
 
 Clear cache:
 ```bash
