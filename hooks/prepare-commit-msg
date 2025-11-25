@@ -145,6 +145,12 @@ get_staged_md5() {
   local diff_content=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=minimal)
   local files_list=$(git diff --staged --name-only | sort | tr '\n' ' ')
 
+  # If nothing is staged (common when amending only the message), use the current commit contents
+  if [ -z "$diff_content$files_list" ] && git rev-parse --verify HEAD^{commit} >/dev/null 2>&1; then
+    diff_content=$(git show --no-color --ignore-all-space --diff-algorithm=minimal HEAD)
+    files_list=$(git show --name-only --pretty=format: HEAD | sort | tr '\n' ' ')
+  fi
+
   # Create MD5 hash of diff content and file list
   echo -n "$diff_content$files_list" | md5sum | cut -d' ' -f1
 }
@@ -176,6 +182,11 @@ fi
 if [ "$REGENERATE" = true ]; then
   # Fetch staged diff content
   DIFF_CONTENT=$(git diff --staged --no-color --ignore-all-space --diff-algorithm=minimal)
+
+  # If nothing is staged (e.g., amend message only), fall back to current commit content
+  if [ -z "$DIFF_CONTENT" ] && git rev-parse --verify HEAD^{commit} >/dev/null 2>&1; then
+    DIFF_CONTENT=$(git show --no-color --ignore-all-space --diff-algorithm=minimal HEAD)
+  fi
 
   # Check if the 'commit-msg' template exists, create if missing
   if ! $LLM_PROGRAM templates show commit-msg &> /dev/null; then
