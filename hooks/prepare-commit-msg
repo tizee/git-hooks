@@ -4,8 +4,15 @@
 # $1 is the path to the commit message file
 # $2 is the type of commit
 
-# Skip LLM processing if we're amending AND no_bypass_amending is not set
-if [ "$2" = "commit" ] && git rev-parse --verify HEAD^{commit} >/dev/null 2>&1 && [ -z "$NO_BYPASS_AMENDING" ]; then
+# Normalize env flags to LLM_*-prefixed variants (old names still respected for backward compatibility)
+LLM_GITHOOK_NO_BYPASS_AMENDING=${LLM_GITHOOK_NO_BYPASS_AMENDING:-$NO_BYPASS_AMENDING}
+LLM_GITHOOK_FORCE=${LLM_GITHOOK_FORCE:-$FORCE_LLM_GITHOOK}
+LLM_GITHOOK_SKIP=${LLM_GITHOOK_SKIP:-$SKIP_LLM_GITHOOK}
+LLM_GITHOOK_SPINNER=${LLM_GITHOOK_SPINNER:-$GITHOOK_SPINNER}
+LLM_GITHOOK_SPINNER_STYLE=${LLM_GITHOOK_SPINNER_STYLE:-${LLM_SPINNER_STYLE:-$SPINNER_STYLE}}
+
+# Skip LLM processing if we're amending AND bypass is allowed (default)
+if [ "$2" = "commit" ] && git rev-parse --verify HEAD^{commit} >/dev/null 2>&1 && [ -z "$LLM_GITHOOK_NO_BYPASS_AMENDING" ]; then
     # We're amending - exit without modifying the message
     exit 0
 fi
@@ -25,7 +32,21 @@ NC=$(printf '\033[0m')
 COMMIT_MSG_FILE=$1  # POSIX-compliant parameter handling
 
 # Skip if environment variable is set
-[ -n "$SKIP_LLM_GITHOOK" ] && exit 0
+[ -n "$LLM_GITHOOK_SKIP" ] && exit 0
+
+# Skip when not running in an interactive terminal (e.g., non‑TTY callers like CI/agents)
+# Allow override with LLM_GITHOOK_FORCE or LLM_GITHOOK_ALLOW_NONINTERACTIVE
+if [ -z "$LLM_GITHOOK_FORCE" ] && [ -z "$LLM_GITHOOK_ALLOW_NONINTERACTIVE" ]; then
+  if [ ! -t 0 ] && [ ! -t 1 ]; then
+    exit 0
+  fi
+fi
+
+# Detect rebase sequences to avoid rewriting historical commit messages
+GIT_DIR=${GIT_DIR:-$(git rev-parse --git-dir 2>/dev/null)}
+if [ -d "$GIT_DIR/rebase-apply" ] || [ -d "$GIT_DIR/rebase-merge" ]; then
+  exit 0
+fi
 
 # Exit early for merge commits
 [ "$2" = "merge" ] || [ -f "$GIT_DIR/MERGE_HEAD" ] && exit 0
@@ -81,7 +102,7 @@ get_spinner_chars() {
 
 # Function to show a spinner while fetching LLM response
 spinner() {
-  local style="${GITHOOK_SPINNER:-${SPINNER_STYLE:-classic}}"
+  local style="${LLM_GITHOOK_SPINNER:-${LLM_GITHOOK_SPINNER_STYLE:-classic}}"
   local spinner_chars=$(get_spinner_chars "$style")
 
   while :; do
@@ -129,7 +150,7 @@ get_staged_md5() {
 }
 
 # Check if we should force regeneration
-if [ -n "$FORCE_LLM_GITHOOK" ]; then
+if [ -n "$LLM_GITHOOK_FORCE" ]; then
   printf "%bForcing commit message regeneration...%b\n" "$YELLOW" "$NC"
   REGENERATE=true
 else
