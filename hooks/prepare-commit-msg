@@ -211,12 +211,7 @@ printf "%b%s%b\n\n" "$YELLOW" "$MSG" "$NC"
 # Strict model name mapping without explanations
 map_llm_model_name() {
     case $1 in
-        "doubao-v3") echo "deepseek-v3" ;;
-        "doubao-r1") echo "deepseek-r1" ;;
-        "siliconflow-r1") echo "deepseek-r1" ;;
-        "siliconflow-v3") echo "deepseek-v3" ;;
-        "hyperbolic-v3") echo "deepseek-v3" ;;
-        "deepseek-chat") echo "deepseek-v3" ;;
+        "deepseek-chat") echo "deepseek-v3.2" ;;
         "deepseek-reasoner") echo "deepseek-r1" ;;
         *) echo "$1" ;;  # Fallthrough for unmapped names
     esac
