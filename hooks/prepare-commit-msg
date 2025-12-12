@@ -12,6 +12,17 @@ LLM_GITHOOK_SHIMMER_SWEEP_SECONDS=${LLM_GITHOOK_SHIMMER_SWEEP_SECONDS:-2.0}
 LLM_GITHOOK_SHIMMER_PADDING=${LLM_GITHOOK_SHIMMER_PADDING:-10}
 LLM_GITHOOK_SHIMMER_BAND_WIDTH=${LLM_GITHOOK_SHIMMER_BAND_WIDTH:-5.0}
 
+# Color configuration for shimmer animation and spinner
+# Shimmer base color: bright default text color (256-color: 0-255, or TrueColor: "R,G,B")
+LLM_GITHOOK_SHIMMER_BASE_COLOR=${LLM_GITHOOK_SHIMMER_BASE_COLOR:-255}
+# Shimmer highlight color: dim "wave" that sweeps across (256-color: 0-255, or TrueColor: "R,G,B")
+LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR=${LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR:-240}
+# Spinner color: defaults to match shimmer base color for visual consistency
+# Accepts: named (red/green/yellow/blue/magenta/cyan/white), 256-color, or TrueColor "R,G,B"
+LLM_GITHOOK_SPINNER_COLOR=${LLM_GITHOOK_SPINNER_COLOR:-$LLM_GITHOOK_SHIMMER_BASE_COLOR}
+# Color mode: "256" for 256-color palette, "truecolor" for 24-bit RGB
+LLM_GITHOOK_COLOR_MODE=${LLM_GITHOOK_COLOR_MODE:-256}
+
 # Skip LLM processing if we're amending AND bypass is allowed (default)
 if [ "$2" = "commit" ] && git rev-parse --verify HEAD^{commit} >/dev/null 2>&1 && [ -z "$LLM_GITHOOK_NO_BYPASS_AMENDING" ]; then
     # We're amending - exit without modifying the message
@@ -103,6 +114,50 @@ get_spinner_chars() {
   echo "|/-\\"
 }
 
+# Parse color value - returns ANSI escape sequence for foreground color
+# Input: color name, 256-color number, or "R,G,B" for TrueColor
+# Output: ANSI escape sequence (without \033[ prefix and m suffix)
+parse_color() {
+  local color="$1"
+
+  # Named colors
+  case "$color" in
+    black)   echo "30" ; return ;;
+    red)     echo "31" ; return ;;
+    green)   echo "32" ; return ;;
+    yellow)  echo "33" ; return ;;
+    blue)    echo "34" ; return ;;
+    magenta) echo "35" ; return ;;
+    cyan)    echo "36" ; return ;;
+    white)   echo "37" ; return ;;
+  esac
+
+  # TrueColor RGB format: "R,G,B"
+  if [[ "$color" == *,*,* ]]; then
+    local r g b
+    IFS=',' read -r r g b <<< "$color"
+    echo "38;2;$r;$g;$b"
+    return
+  fi
+
+  # 256-color number
+  if [[ "$color" =~ ^[0-9]+$ ]]; then
+    echo "38;5;$color"
+    return
+  fi
+
+  # Fallback to white
+  echo "37"
+}
+
+# Get ANSI escape code for spinner color
+get_spinner_ansi() {
+  local color="$LLM_GITHOOK_SPINNER_COLOR"
+  local code
+  code=$(parse_color "$color")
+  printf '\033[%sm' "$code"
+}
+
 # Detect the best available high-resolution time source once.
 detect_time_provider() {
   if command -v gdate >/dev/null 2>&1; then
@@ -138,19 +193,21 @@ PY
   esac
 }
 
-# Render the status text with a shimmer animation (256-color grayscale sweep).
-render_shimmer_text() {
+# Render shimmer text using 256-color interpolation
+render_shimmer_256() {
   local text="$1"
   local now="$2"
   local start="$3"
+  local base_color="$LLM_GITHOOK_SHIMMER_BASE_COLOR"
+  local highlight_color="$LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR"
 
-  # We delegate float math and ANSI building to awk for speed and portability.
-  # The shimmer animation algorithm: cosine falloff in a moving band.
   printf '%s %s\n' "$now" "$start" | awk \
     -v text="$text" \
     -v sweep="$LLM_GITHOOK_SHIMMER_SWEEP_SECONDS" \
     -v pad="$LLM_GITHOOK_SHIMMER_PADDING" \
-    -v width="$LLM_GITHOOK_SHIMMER_BAND_WIDTH" '
+    -v width="$LLM_GITHOOK_SHIMMER_BAND_WIDTH" \
+    -v base="$base_color" \
+    -v highlight="$highlight_color" '
     {
       now = $1;
       start = $2;
@@ -174,17 +231,113 @@ render_shimmer_text() {
           intensity = 0.5 * (1.0 + cos(x));
         }
 
-        base_gray = 240;
-        gray_step = int(base_gray + (intensity * (255 - base_gray)));
-        if (gray_step > 255) gray_step = 255;
-        if (gray_step < 232) gray_step = 232;
+        # Interpolate between base and highlight colors
+        color_val = int(base + (intensity * (highlight - base)));
+        if (color_val > 255) color_val = 255;
+        if (color_val < 0) color_val = 0;
 
-        output = output sprintf("\033[38;5;%dm%s", gray_step, substr(text, i+1, 1));
+        output = output sprintf("\033[38;5;%dm%s", color_val, substr(text, i+1, 1));
       }
 
       output = output "\033[0m";
       print output;
     }'
+}
+
+# Render shimmer text using TrueColor (24-bit RGB) interpolation
+render_shimmer_truecolor() {
+  local text="$1"
+  local now="$2"
+  local start="$3"
+  local base_color="$LLM_GITHOOK_SHIMMER_BASE_COLOR"
+  local highlight_color="$LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR"
+
+  # Parse RGB values from "R,G,B" format or convert 256-color to approximate RGB
+  local base_r base_g base_b
+  local highlight_r highlight_g highlight_b
+
+  if [[ "$base_color" == *,*,* ]]; then
+    IFS=',' read -r base_r base_g base_b <<< "$base_color"
+  else
+    # Convert 256-color grayscale to RGB
+    if [[ "$base_color" -ge 232 && "$base_color" -le 255 ]]; then
+      local gray_val=$(( (base_color - 232) * 10 + 8 ))
+      base_r=$gray_val; base_g=$gray_val; base_b=$gray_val
+    else
+      base_r=128; base_g=128; base_b=128
+    fi
+  fi
+
+  if [[ "$highlight_color" == *,*,* ]]; then
+    IFS=',' read -r highlight_r highlight_g highlight_b <<< "$highlight_color"
+  else
+    if [[ "$highlight_color" -ge 232 && "$highlight_color" -le 255 ]]; then
+      local gray_val=$(( (highlight_color - 232) * 10 + 8 ))
+      highlight_r=$gray_val; highlight_g=$gray_val; highlight_b=$gray_val
+    else
+      highlight_r=255; highlight_g=255; highlight_b=255
+    fi
+  fi
+
+  printf '%s %s\n' "$now" "$start" | awk \
+    -v text="$text" \
+    -v sweep="$LLM_GITHOOK_SHIMMER_SWEEP_SECONDS" \
+    -v pad="$LLM_GITHOOK_SHIMMER_PADDING" \
+    -v width="$LLM_GITHOOK_SHIMMER_BAND_WIDTH" \
+    -v base_r="$base_r" -v base_g="$base_g" -v base_b="$base_b" \
+    -v hi_r="$highlight_r" -v hi_g="$highlight_g" -v hi_b="$highlight_b" '
+    {
+      now = $1;
+      start = $2;
+      len = length(text);
+      period = len + (pad * 2);
+
+      elapsed = now - start;
+      pos_f = (elapsed % sweep) / sweep;
+      center = pos_f * period;
+
+      output = "";
+
+      for (i = 0; i < len; i++) {
+        i_pos = i + pad;
+        dist = i_pos - center;
+        if (dist < 0) dist = -dist;
+
+        intensity = 0.0;
+        if (dist <= width) {
+          x = 3.14159 * (dist / width);
+          intensity = 0.5 * (1.0 + cos(x));
+        }
+
+        # Linear interpolation between base and highlight RGB
+        r = int(base_r + (intensity * (hi_r - base_r)));
+        g = int(base_g + (intensity * (hi_g - base_g)));
+        b = int(base_b + (intensity * (hi_b - base_b)));
+
+        # Clamp values
+        if (r > 255) r = 255; if (r < 0) r = 0;
+        if (g > 255) g = 255; if (g < 0) g = 0;
+        if (b > 255) b = 255; if (b < 0) b = 0;
+
+        output = output sprintf("\033[38;2;%d;%d;%dm%s", r, g, b, substr(text, i+1, 1));
+      }
+
+      output = output "\033[0m";
+      print output;
+    }'
+}
+
+# Main shimmer render function - dispatches to appropriate renderer based on color mode
+render_shimmer_text() {
+  local text="$1"
+  local now="$2"
+  local start="$3"
+
+  if [[ "$LLM_GITHOOK_COLOR_MODE" == "truecolor" ]]; then
+    render_shimmer_truecolor "$text" "$now" "$start"
+  else
+    render_shimmer_256 "$text" "$now" "$start"
+  fi
 }
 
 # Function to show a spinner while fetching LLM response
@@ -224,6 +377,10 @@ PY
 
   local i=0
 
+  # Get spinner color ANSI code (computed once outside the loop)
+  local spinner_ansi
+  spinner_ansi=$(get_spinner_ansi)
+
   while :; do
     local char="${spinner_frames[i]}"
     local now
@@ -231,8 +388,8 @@ PY
     local shimmered
     shimmered="$(render_shimmer_text "$LLM_GITHOOK_STATUS_TEXT" "$now" "$start_time")"
 
-    # Clear the line and redraw in-place.
-    printf "\r\033[K%b%s%b %s" "$YELLOW" "$char" "$NC" "$shimmered"
+    # Clear the line and redraw in-place with configurable spinner color.
+    printf "\r\033[K%s%s%b %s" "$spinner_ansi" "$char" "$NC" "$shimmered"
 
     ((i = (i + 1) % ${#spinner_frames[@]}))
     sleep "$frame_interval"

@@ -85,6 +85,10 @@ git config --global core.hooksPath "$HOOKS_REPO\hooks"
 - `LLM_GITHOOK_SHIMMER_SWEEP_SECONDS=2.0`: Shimmer sweep duration in seconds
 - `LLM_GITHOOK_SHIMMER_PADDING=10`: Shimmer padding in characters
 - `LLM_GITHOOK_SHIMMER_BAND_WIDTH=5.0`: Shimmer band half-width in characters
+- `LLM_GITHOOK_COLOR_MODE=256`: Color mode (`256` or `truecolor`)
+- `LLM_GITHOOK_SHIMMER_BASE_COLOR=255`: Shimmer base text color (256-color)
+- `LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR=240`: Shimmer wave color (256-color)
+- `LLM_GITHOOK_SPINNER_COLOR`: Spinner color (defaults to match shimmer base)
 - `LLM_GITHOOK_ALLOW_NONINTERACTIVE=1`: Allow hook to run in non-interactive terminals (CI/agents)
 - `LLM_PROGRAM`: Custom path to the `llm` executable (defaults to system `llm`)
 - `LLM_PREPARE_COMMIT_MSG_PROMPT`: Custom path to the prompt template file
@@ -117,6 +121,32 @@ git config --global core.hooksPath "$HOOKS_REPO\hooks"
   # Set spinner style
   export LLM_GITHOOK_SPINNER_STYLE="dots"
   ```
+
+#### Color Customization
+The shimmer animation and spinner support configurable colors via 256-color or TrueColor modes.
+
+**Environment Variables:**
+- `LLM_GITHOOK_COLOR_MODE`: `256` (default) or `truecolor`
+- `LLM_GITHOOK_SHIMMER_BASE_COLOR`: Base text color (default: `255`)
+- `LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR`: Wave color (default: `240`)
+- `LLM_GITHOOK_SPINNER_COLOR`: Spinner color (default: same as base)
+
+**Accepted formats:**
+- 256-color numbers: `0-255` (default mode)
+- TrueColor RGB: `"R,G,B"` (requires `LLM_GITHOOK_COLOR_MODE=truecolor`)
+
+**Presets:**
+```bash
+# Light base with darker wave (default 256-color)
+export LLM_GITHOOK_COLOR_MODE=256
+export LLM_GITHOOK_SHIMMER_BASE_COLOR=255
+export LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR=240
+
+# Darker base with lighter wave (inverted)
+export LLM_GITHOOK_COLOR_MODE=256
+export LLM_GITHOOK_SHIMMER_BASE_COLOR=240
+export LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR=255
+```
 
 #### Bypass and Control Variables
 - **LLM_GITHOOK_SKIP**: Complete bypass for AI generation
