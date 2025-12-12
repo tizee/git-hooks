@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Universal .git/hooks/prepare-commit-msg
 
 # $1 is the path to the commit message file
@@ -6,6 +6,11 @@
 
 # Set default values for LLM hook environment variables
 LLM_GITHOOK_SPINNER_STYLE=${LLM_GITHOOK_SPINNER_STYLE:-classic}
+LLM_GITHOOK_FPS=${LLM_GITHOOK_FPS:-30}
+LLM_GITHOOK_STATUS_TEXT=${LLM_GITHOOK_STATUS_TEXT:-"Generating commit message..."}
+LLM_GITHOOK_SHIMMER_SWEEP_SECONDS=${LLM_GITHOOK_SHIMMER_SWEEP_SECONDS:-2.0}
+LLM_GITHOOK_SHIMMER_PADDING=${LLM_GITHOOK_SHIMMER_PADDING:-10}
+LLM_GITHOOK_SHIMMER_BAND_WIDTH=${LLM_GITHOOK_SHIMMER_BAND_WIDTH:-5.0}
 
 # Skip LLM processing if we're amending AND bypass is allowed (default)
 if [ "$2" = "commit" ] && git rev-parse --verify HEAD^{commit} >/dev/null 2>&1 && [ -z "$LLM_GITHOOK_NO_BYPASS_AMENDING" ]; then
@@ -45,7 +50,9 @@ if [ -d "$GIT_DIR/rebase-apply" ] || [ -d "$GIT_DIR/rebase-merge" ]; then
 fi
 
 # Exit early for merge commits
-[ "$2" = "merge" ] || [ -f "$GIT_DIR/MERGE_HEAD" ] && exit 0
+if [ "$2" = "merge" ] || [ -f "$GIT_DIR/MERGE_HEAD" ]; then
+  exit 0
+fi
 
 # Function to check if `llm` is installed (with Windows support)
 check_llm() {
@@ -96,17 +103,139 @@ get_spinner_chars() {
   echo "|/-\\"
 }
 
+# Detect the best available high-resolution time source once.
+detect_time_provider() {
+  if command -v gdate >/dev/null 2>&1; then
+    echo "gdate"
+    return 0
+  fi
+
+  if perl -MTime::HiRes -e 'exit 0' >/dev/null 2>&1; then
+    echo "perl"
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    echo "python3"
+    return 0
+  fi
+
+  echo "date"
+}
+
+TIME_PROVIDER="$(detect_time_provider)"
+
+get_time() {
+  case "$TIME_PROVIDER" in
+    gdate) gdate +%s.%N ;;
+    perl) perl -MTime::HiRes=time -e 'printf "%.9f\n", time()' ;;
+    python3) python3 - <<'PY'
+import time
+print(f"{time.time():.9f}")
+PY
+      ;;
+    *) date +%s ;;
+  esac
+}
+
+# Render the status text with a shimmer animation (256-color grayscale sweep).
+render_shimmer_text() {
+  local text="$1"
+  local now="$2"
+  local start="$3"
+
+  # We delegate float math and ANSI building to awk for speed and portability.
+  # The shimmer animation algorithm: cosine falloff in a moving band.
+  printf '%s %s\n' "$now" "$start" | awk \
+    -v text="$text" \
+    -v sweep="$LLM_GITHOOK_SHIMMER_SWEEP_SECONDS" \
+    -v pad="$LLM_GITHOOK_SHIMMER_PADDING" \
+    -v width="$LLM_GITHOOK_SHIMMER_BAND_WIDTH" '
+    {
+      now = $1;
+      start = $2;
+      len = length(text);
+      period = len + (pad * 2);
+
+      elapsed = now - start;
+      pos_f = (elapsed % sweep) / sweep;
+      center = pos_f * period;
+
+      output = "";
+
+      for (i = 0; i < len; i++) {
+        i_pos = i + pad;
+        dist = i_pos - center;
+        if (dist < 0) dist = -dist;
+
+        intensity = 0.0;
+        if (dist <= width) {
+          x = 3.14159 * (dist / width);
+          intensity = 0.5 * (1.0 + cos(x));
+        }
+
+        base_gray = 240;
+        gray_step = int(base_gray + (intensity * (255 - base_gray)));
+        if (gray_step > 255) gray_step = 255;
+        if (gray_step < 232) gray_step = 232;
+
+        output = output sprintf("\033[38;5;%dm%s", gray_step, substr(text, i+1, 1));
+      }
+
+      output = output "\033[0m";
+      print output;
+    }'
+}
+
 # Function to show a spinner while fetching LLM response
 spinner() {
   local style="${LLM_GITHOOK_SPINNER_STYLE:-classic}"
   local spinner_chars=$(get_spinner_chars "$style")
+  local -a spinner_frames=()
+
+  # Unicode-safe spinner frames: split into one character per frame when possible.
+  # Bash substring operations are byte-based and will break multi-byte glyphs (e.g., braille dots).
+  if command -v python3 >/dev/null 2>&1; then
+    while IFS= read -r _frame; do
+      spinner_frames+=("$_frame")
+    done < <(SPINNER_CHARS="$spinner_chars" python3 - <<'PY'
+import os, sys
+s = os.environ.get("SPINNER_CHARS", "")
+for ch in s:
+    sys.stdout.write(ch + "\n")
+PY
+    )
+  fi
+  if [ "${#spinner_frames[@]}" -eq 0 ]; then
+    local j
+    for ((j = 0; j < ${#spinner_chars}; j++)); do
+      spinner_frames+=("${spinner_chars:j:1}")
+    done
+  fi
+
+  local start_time
+  start_time="$(get_time)"
+
+  # Frame pacing: default 30 FPS, overridable via LLM_GITHOOK_FPS.
+  # Sleep granularity varies by platform, but this keeps the hook from spinning too fast.
+  local fps="${LLM_GITHOOK_FPS:-30}"
+  local frame_interval
+  frame_interval="$(awk -v fps="$fps" 'BEGIN{ if (fps <= 0) fps = 30; printf "%.6f", (1.0 / fps) }')"
+
+  local i=0
 
   while :; do
-    for ((i=0; i<${#spinner_chars}; i++)); do
-      local char="${spinner_chars:i:1}"
-      printf "\r%b%s Generating commit message...%b" "$YELLOW" "$char" "$NC"
-      sleep 0.016
-    done
+    local char="${spinner_frames[i]}"
+    local now
+    now="$(get_time)"
+    local shimmered
+    shimmered="$(render_shimmer_text "$LLM_GITHOOK_STATUS_TEXT" "$now" "$start_time")"
+
+    # Clear the line and redraw in-place.
+    printf "\r\033[K%b%s%b %s" "$YELLOW" "$char" "$NC" "$shimmered"
+
+    ((i = (i + 1) % ${#spinner_frames[@]}))
+    sleep "$frame_interval"
   done
 }
 
@@ -116,14 +245,17 @@ show_cursor() { printf '\033[?25h'; }
 
 # Start spinner in the background
 hide_cursor
-spinner &
+spinner 2>/dev/null &
 SPIN_PID=$!
 
 # Ensure the spinner and cursor are restored on exit
 cleanup() {
-  kill -9 $SPIN_PID 2>/dev/null || true
-  wait $SPIN_PID 2>/dev/null
+  if [ -n "${SPIN_PID:-}" ] && kill -0 "$SPIN_PID" 2>/dev/null; then
+    kill "$SPIN_PID" 2>/dev/null || true
+    wait "$SPIN_PID" 2>/dev/null || true
+  fi
   show_cursor
+  printf "\r\033[K"
 }
 trap cleanup EXIT
 
@@ -147,8 +279,12 @@ get_staged_md5() {
     files_list=$(git show --name-only --pretty=format: HEAD | sort | tr '\n' ' ')
   fi
 
-  # Create MD5 hash of diff content and file list
-  echo -n "$diff_content$files_list" | md5sum | cut -d' ' -f1
+  # Create MD5 hash of diff content and file list (GNU coreutils or macOS).
+  if command -v md5sum >/dev/null 2>&1; then
+    echo -n "$diff_content$files_list" | md5sum | cut -d' ' -f1
+  else
+    echo -n "$diff_content$files_list" | md5 -q
+  fi
 }
 
 # Check if we should force regeneration

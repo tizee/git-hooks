@@ -80,6 +80,11 @@ git config --global core.hooksPath "$HOOKS_REPO\hooks"
 - `LLM_GITHOOK_FORCE=1`: Force regeneration even with cached/unmodified diffs
 - `LLM_GITHOOK_NO_BYPASS_AMENDING=1`: Prevent bypass during commit amending (normally bypasses for amends)
 - `LLM_GITHOOK_SPINNER_STYLE=style`: Set custom spinner style (defaults to `classic`, see available styles below)
+- `LLM_GITHOOK_FPS=30`: Control animation FPS (default `30`)
+- `LLM_GITHOOK_STATUS_TEXT="..."`: Override the animated status text
+- `LLM_GITHOOK_SHIMMER_SWEEP_SECONDS=2.0`: Shimmer sweep duration in seconds
+- `LLM_GITHOOK_SHIMMER_PADDING=10`: Shimmer padding in characters
+- `LLM_GITHOOK_SHIMMER_BAND_WIDTH=5.0`: Shimmer band half-width in characters
 - `LLM_GITHOOK_ALLOW_NONINTERACTIVE=1`: Allow hook to run in non-interactive terminals (CI/agents)
 - `LLM_PROGRAM`: Custom path to the `llm` executable (defaults to system `llm`)
 - `LLM_PREPARE_COMMIT_MSG_PROMPT`: Custom path to the prompt template file
