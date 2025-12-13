@@ -59,10 +59,10 @@ git config --global core.hooksPath "$HOOKS_REPO\hooks"
   ```bash
   # Ubuntu/Debian
   sudo apt-get install clang-format
-  
+
   # macOS
   brew install clang-format
-  
+
   # Windows (via Chocolatey)
   choco install llvm
   ```
@@ -184,10 +184,7 @@ The hook automatically detects and skips execution in the following scenarios:
 
 ### Model Name Mapping
 The system automatically maps common model names for consistency:
-- `doubao-v3` → `deepseek-v3`
-- `doubao-r1` → `deepseek-r1`
-- `siliconflow-r1` → `deepseek-r1`
-- `deepseek-chat` → `deepseek-v3`
+- `deepseek-chat` → `deepseek-v3.2`
 - `deepseek-reasoner` → `deepseek-r1`
 
 ## 🔍 Usage Examples
