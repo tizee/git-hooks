@@ -67,11 +67,7 @@ fi
 
 # Function to check if `llm` is installed (with Windows support)
 check_llm() {
-  case "$(uname -s)" in
-    Linux*|Darwin*) command -v llm >/dev/null 2>&1 ;;
-    CYGWIN*|MINGW*|MSYS*) [ -f "$LLM_PROGRAM" ] && return 0 || return 1;;
-    *) return 1 ;;
-  esac
+  [ -f "$LLM_PROGRAM" ] && return 0 || return 1
 }
 
 if ! check_llm; then
@@ -484,7 +480,7 @@ if [ "$REGENERATE" = true ]; then
 
   # Generate commit message with LLM
   if ! MSG=$(echo "$DIFF_CONTENT" | $LLM_PROGRAM -t commit-msg | iconv -c -f UTF-8 -t UTF-8 2>&1); then
-    printf "\n%bError: 'llm' command failed to generate the commit message:\n%b%s%b\n\nManually set the commit message.\n" "$RED" "$NC" "$MSG" "$NC"
+    printf "\n%bError: $LLM_PROGRAM failed to generate the commit message:\n%b%s%b\n\nManually set the commit message.\n" "$RED" "$NC" "$MSG" "$NC"
     exit 1
   fi
 
@@ -501,18 +497,9 @@ printf "\r\033[K"
 printf "%bGenerated commit message:%b\n" "$GREEN" "$NC"
 printf "%b%s%b\n\n" "$YELLOW" "$MSG" "$NC"
 
-# Strict model name mapping without explanations
-map_llm_model_name() {
-    case $1 in
-        "deepseek-chat") echo "deepseek-v3.2" ;;
-        "deepseek-reasoner") echo "deepseek-r1" ;;
-        *) echo "$1" ;;  # Fallthrough for unmapped names
-    esac
-}
-
 # Get user email from git config and AI model info
 USER_EMAIL=$(git config --global --get user.email)
-AI_MODEL=$(map_llm_model_name "$(llm models default 2>/dev/null || echo "AI")")
+AI_MODEL="$($LLM_PROGRAM models default 2>/dev/null)"
 
 # Write output to commit message file with signed-off-by and co-authored-by footers
 {
