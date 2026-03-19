@@ -489,6 +489,9 @@ if [ "$REGENERATE" = true ]; then
   echo "$MSG" > "$CACHE_MSG_FILE"
 fi
 
+# Strip leading/trailing blank lines and leading/trailing spaces per line
+MSG="$(printf '%s' "$MSG" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/[^[:space:]]/,$!d' | sed -e :a -e '/^[[:space:]]*$/{$d;N;ba' -e '}')"
+
 # Stop spinner and restore cursor
 cleanup
 
