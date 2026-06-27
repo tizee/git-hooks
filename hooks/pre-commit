@@ -46,14 +46,36 @@ if [ -z "$changed_files" ]; then
     exit 0
 fi
 
-echo "Running clang-format on:"
-echo "$changed_files"
+has_clang_format() {
+  local dir="$1"
+  local top
+  top="$(git rev-parse --show-toplevel)"
+
+  while true; do
+    if [ -f "$dir/.clang-format" ] || [ -f "$dir/_clang-format" ]; then
+      return 0
+    fi
+
+    [ "$dir" = "$top" ] && return 1
+    [ "$dir" = "/" ] && return 1
+    dir="$(dirname "$dir")"
+  done
+}
 
 for file in $changed_files; do
-    # clang-format 会直接格式化文件
-    clang-format -i "$file"
-    # 重新添加到暂存区
-    git add "$file"
+  case "$file" in
+    *.c|*.h|*.cc|*.cpp|*.hpp)
+      abs_file="$(realpath "$file")"
+      dir="$(dirname "$abs_file")"
+
+      if has_clang_format "$dir"; then
+        clang-format --style=file --fallback-style=none -i "$file"
+        git add "$file"
+      else
+        echo "skip clang-format: no .clang-format for $file"
+      fi
+      ;;
+  esac
 done
 
 # If no leaks are detected, allow the commit to proceed
