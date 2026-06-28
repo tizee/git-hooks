@@ -479,7 +479,7 @@ if [ "$REGENERATE" = true ]; then
   fi
 
   # Generate commit message with LLM
-  if ! MSG=$(echo "$DIFF_CONTENT" | $LLM_PROGRAM -t commit-msg | iconv -c -f UTF-8 -t UTF-8 2>&1); then
+  if ! MSG=$(echo "$DIFF_CONTENT" | $LLM_PROGRAM prompt -t commit-msg | iconv -c -f UTF-8 -t UTF-8 2>&1); then
     printf "\n%bError: $LLM_PROGRAM failed to generate the commit message:\n%b%s%b\n\nManually set the commit message.\n" "$RED" "$NC" "$MSG" "$NC"
     exit 1
   fi
