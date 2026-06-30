@@ -502,7 +502,7 @@ printf "%b%s%b\n\n" "$YELLOW" "$MSG" "$NC"
 
 # Get user email from git config and AI model info
 USER_EMAIL=$(git config --global --get user.email)
-AI_MODEL="$($LLM_PROGRAM models default 2>/dev/null)"
+AI_MODEL="$($LLM_PROGRAM models default --name 2>/dev/null)"
 
 # Write output to commit message file with signed-off-by and co-authored-by footers
 {
