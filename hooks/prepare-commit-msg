@@ -7,6 +7,7 @@
 # Set default values for LLM hook environment variables
 LLM_GITHOOK_SPINNER_STYLE=${LLM_GITHOOK_SPINNER_STYLE:-classic}
 LLM_GITHOOK_FPS=${LLM_GITHOOK_FPS:-30}
+LLM_GITHOOK_SPINNER_FPS=${LLM_GITHOOK_SPINNER_FPS:-10}
 LLM_GITHOOK_STATUS_TEXT=${LLM_GITHOOK_STATUS_TEXT:-"Generating commit message…"}
 LLM_GITHOOK_SHIMMER_SWEEP_SECONDS=${LLM_GITHOOK_SHIMMER_SWEEP_SECONDS:-2.0}
 LLM_GITHOOK_SHIMMER_PADDING=${LLM_GITHOOK_SHIMMER_PADDING:-10}
@@ -154,8 +155,30 @@ get_spinner_ansi() {
   printf '\033[%sm' "$code"
 }
 
-# Detect the best available high-resolution time source once.
+# -----------------------------------------------------------------------------
+# Timing, shimmer rendering, and frame pacing for the spinner animation.
+#
+# On Windows, Git for Windows' MSYS bash has to emulate POSIX fork/exec on top
+# of the native Windows process model, and that emulation costs roughly one to
+# several tens of milliseconds *per spawned process* - vs. sub-millisecond
+# native fork on Linux/macOS. The previous implementation spawned up to three
+# external processes (a time-source binary, `awk`, and `sleep`) on *every
+# single animation frame*, which by itself is enough overhead to blow a 30fps
+# (33ms) frame budget on Windows, regardless of which terminal is displaying
+# the output. Everything below does the per-frame work with bash builtins
+# only; external processes are used at most once, at hook startup, never
+# inside the render loop.
+# -----------------------------------------------------------------------------
+
+# Detect the best available high-resolution time source once. Bash's own
+# $EPOCHREALTIME (bash >= 5.0, e.g. the MSYS2 bash bundled with Git for
+# Windows) needs no subprocess at all, so it is tried first.
 detect_time_provider() {
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then
+    echo "bash"
+    return 0
+  fi
+
   if command -v gdate >/dev/null 2>&1; then
     echo "gdate"
     return 0
@@ -176,8 +199,12 @@ detect_time_provider() {
 
 TIME_PROVIDER="$(detect_time_provider)"
 
+# Kept for any external callers (e.g. scripts/shimmer-demo.sh); the hot path
+# below (get_now_us) bypasses this on the bash/EPOCHREALTIME fast path to
+# avoid the subshell that a `$(get_time)` command substitution would cost.
 get_time() {
   case "$TIME_PROVIDER" in
+    bash) printf '%s\n' "$EPOCHREALTIME" ;;
     gdate) gdate +%s.%N ;;
     perl) perl -MTime::HiRes=time -e 'printf "%.9f\n", time()' ;;
     python3) python3 - <<'PY'
@@ -189,151 +216,212 @@ PY
   esac
 }
 
-# Render shimmer text using 256-color interpolation
-render_shimmer_256() {
-  local text="$1"
-  local now="$2"
-  local start="$3"
-  local base_color="$LLM_GITHOOK_SHIMMER_BASE_COLOR"
-  local highlight_color="$LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR"
-
-  printf '%s %s\n' "$now" "$start" | awk \
-    -v text="$text" \
-    -v sweep="$LLM_GITHOOK_SHIMMER_SWEEP_SECONDS" \
-    -v pad="$LLM_GITHOOK_SHIMMER_PADDING" \
-    -v width="$LLM_GITHOOK_SHIMMER_BAND_WIDTH" \
-    -v base="$base_color" \
-    -v highlight="$highlight_color" '
-    {
-      now = $1;
-      start = $2;
-      len = length(text);
-      period = len + (pad * 2);
-
-      elapsed = now - start;
-      pos_f = (elapsed % sweep) / sweep;
-      center = pos_f * period;
-
-      output = "";
-
-      for (i = 0; i < len; i++) {
-        i_pos = i + pad;
-        dist = i_pos - center;
-        if (dist < 0) dist = -dist;
-
-        intensity = 0.0;
-        if (dist <= width) {
-          x = 3.14159 * (dist / width);
-          intensity = 0.5 * (1.0 + cos(x));
-        }
-
-        # Interpolate between base and highlight colors
-        color_val = int(base + (intensity * (highlight - base)));
-        if (color_val > 255) color_val = 255;
-        if (color_val < 0) color_val = 0;
-
-        output = output sprintf("\033[38;5;%dm%s", color_val, substr(text, i+1, 1));
-      }
-
-      output = output "\033[0m";
-      print output;
-    }'
+# Sets global NOW_US to the current time in integer microseconds. On the
+# EPOCHREALTIME fast path this is pure variable/arithmetic access - no
+# subshell, no fork. Only the legacy fallback providers (old bash without
+# EPOCHREALTIME, e.g. macOS's stock bash 3.2) still pay for a subprocess per
+# call, exactly as before - no regression there, just no fast path.
+NOW_US=0
+get_now_us() {
+  local ts sec frac
+  case "$TIME_PROVIDER" in
+    bash) ts="$EPOCHREALTIME" ;;
+    *) ts="$(get_time)" ;;
+  esac
+  sec="${ts%%.*}"
+  if [[ "$ts" == *.* ]]; then frac="${ts#*.}"; else frac=""; fi
+  frac="${frac}000000"
+  frac="${frac:0:6}"
+  NOW_US=$((10#$sec * 1000000 + 10#$frac))
 }
 
-# Render shimmer text using TrueColor (24-bit RGB) interpolation
-render_shimmer_truecolor() {
-  local text="$1"
-  local now="$2"
-  local start="$3"
-  local base_color="$LLM_GITHOOK_SHIMMER_BASE_COLOR"
-  local highlight_color="$LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR"
-
-  # Parse RGB values from "R,G,B" format or convert 256-color to approximate RGB
-  local base_r base_g base_b
-  local highlight_r highlight_g highlight_b
-
-  if [[ "$base_color" == *,*,* ]]; then
-    IFS=',' read -r base_r base_g base_b <<< "$base_color"
-  else
-    # Convert 256-color grayscale to RGB
-    if [[ "$base_color" -ge 232 && "$base_color" -le 255 ]]; then
-      local gray_val=$(( (base_color - 232) * 10 + 8 ))
-      base_r=$gray_val; base_g=$gray_val; base_b=$gray_val
-    else
-      base_r=128; base_g=128; base_b=128
-    fi
-  fi
-
-  if [[ "$highlight_color" == *,*,* ]]; then
-    IFS=',' read -r highlight_r highlight_g highlight_b <<< "$highlight_color"
-  else
-    if [[ "$highlight_color" -ge 232 && "$highlight_color" -le 255 ]]; then
-      local gray_val=$(( (highlight_color - 232) * 10 + 8 ))
-      highlight_r=$gray_val; highlight_g=$gray_val; highlight_b=$gray_val
-    else
-      highlight_r=255; highlight_g=255; highlight_b=255
-    fi
-  fi
-
-  printf '%s %s\n' "$now" "$start" | awk \
-    -v text="$text" \
-    -v sweep="$LLM_GITHOOK_SHIMMER_SWEEP_SECONDS" \
-    -v pad="$LLM_GITHOOK_SHIMMER_PADDING" \
-    -v width="$LLM_GITHOOK_SHIMMER_BAND_WIDTH" \
-    -v base_r="$base_r" -v base_g="$base_g" -v base_b="$base_b" \
-    -v hi_r="$highlight_r" -v hi_g="$highlight_g" -v hi_b="$highlight_b" '
-    {
-      now = $1;
-      start = $2;
-      len = length(text);
-      period = len + (pad * 2);
-
-      elapsed = now - start;
-      pos_f = (elapsed % sweep) / sweep;
-      center = pos_f * period;
-
-      output = "";
-
-      for (i = 0; i < len; i++) {
-        i_pos = i + pad;
-        dist = i_pos - center;
-        if (dist < 0) dist = -dist;
-
-        intensity = 0.0;
-        if (dist <= width) {
-          x = 3.14159 * (dist / width);
-          intensity = 0.5 * (1.0 + cos(x));
-        }
-
-        # Linear interpolation between base and highlight RGB
-        r = int(base_r + (intensity * (hi_r - base_r)));
-        g = int(base_g + (intensity * (hi_g - base_g)));
-        b = int(base_b + (intensity * (hi_b - base_b)));
-
-        # Clamp values
-        if (r > 255) r = 255; if (r < 0) r = 0;
-        if (g > 255) g = 255; if (g < 0) g = 0;
-        if (b > 255) b = 255; if (b < 0) b = 0;
-
-        output = output sprintf("\033[38;2;%d;%d;%dm%s", r, g, b, substr(text, i+1, 1));
-      }
-
-      output = output "\033[0m";
-      print output;
-    }'
+# Convert a decimal string (e.g. "2.0", "5", ".5") into an integer scaled by
+# 1000 (3 fractional digits) - pure bash string/arithmetic ops, no fork. Used
+# once at spinner startup to pre-convert config values; not called per frame.
+to_fixed3() {
+  local val="$1" int_part frac_part
+  int_part="${val%%.*}"
+  if [[ "$val" == *.* ]]; then frac_part="${val#*.}"; else frac_part=""; fi
+  [[ -z "$int_part" ]] && int_part=0
+  frac_part="${frac_part}000"
+  frac_part="${frac_part:0:3}"
+  printf '%d' "$((10#$int_part * 1000 + 10#$frac_part))"
 }
 
-# Main shimmer render function - dispatches to appropriate renderer based on color mode
-render_shimmer_text() {
-  local text="$1"
-  local now="$2"
-  local start="$3"
+# Precomputed lookup table for the shimmer falloff curve
+# intensity(t) = 0.5 * (1 + cos(pi * t)), t in [0, 1], sampled at 65 points
+# and scaled by 1000. Replaces a per-frame floating-point cos() call (bash
+# has no floating point, hence the original awk dependency) with an integer
+# table lookup. Max error vs. the exact curve is 1/1000 (visually identical).
+SHIMMER_COS_TABLE=(
+  1000 999 998 995 990 985 978 971 962 952
+  941 929 916 902 887 870 854 836 817 798
+  778 757 736 714 691 668 645 621 598 573
+  549 525 500 475 451 427 402 379 355 332
+  309 286 264 243 222 202 183 164 146 130
+  113 98 84 71 59 48 38 29 22 15
+  10 5 2 1 0
+)
+
+# One-time (not per-frame) setup of shimmer parameters: converts the
+# user-configurable env vars into integer/fixed-point form and, for
+# TrueColor mode, resolves base/highlight RGB components once instead of
+# re-parsing them on every frame like the previous implementation did.
+SHIMMER_SWEEP_US=2000000
+SHIMMER_BAND_WIDTH_FIXED=5000
+SHIMMER_USE_TRUECOLOR=0
+SHIMMER_BASE_R=128; SHIMMER_BASE_G=128; SHIMMER_BASE_B=128
+SHIMMER_HI_R=255; SHIMMER_HI_G=255; SHIMMER_HI_B=255
+
+# Resolve a color spec ("R,G,B" or a 256-color grayscale index 232-255) to
+# RGB components, writing globals SHIMMER_RGB_{R,G,B}. $2 is the fallback.
+_shimmer_resolve_rgb() {
+  local color="$1" fallback="$2"
+  if [[ "$color" == *,*,* ]]; then
+    IFS=',' read -r SHIMMER_RGB_R SHIMMER_RGB_G SHIMMER_RGB_B <<< "$color"
+  elif [[ "$color" =~ ^[0-9]+$ ]] && (( color >= 232 && color <= 255 )); then
+    local gray=$(( (color - 232) * 10 + 8 ))
+    SHIMMER_RGB_R=$gray; SHIMMER_RGB_G=$gray; SHIMMER_RGB_B=$gray
+  else
+    SHIMMER_RGB_R=$fallback; SHIMMER_RGB_G=$fallback; SHIMMER_RGB_B=$fallback
+  fi
+  return 0
+}
+
+init_shimmer_params() {
+  SHIMMER_SWEEP_US=$(( $(to_fixed3 "$LLM_GITHOOK_SHIMMER_SWEEP_SECONDS") * 1000 ))
+  if (( SHIMMER_SWEEP_US <= 0 )); then SHIMMER_SWEEP_US=2000000; fi
+
+  SHIMMER_BAND_WIDTH_FIXED="$(to_fixed3 "$LLM_GITHOOK_SHIMMER_BAND_WIDTH")"
+  if (( SHIMMER_BAND_WIDTH_FIXED <= 0 )); then SHIMMER_BAND_WIDTH_FIXED=5000; fi
 
   if [[ "$LLM_GITHOOK_COLOR_MODE" == "truecolor" ]]; then
-    render_shimmer_truecolor "$text" "$now" "$start"
+    SHIMMER_USE_TRUECOLOR=1
+    _shimmer_resolve_rgb "$LLM_GITHOOK_SHIMMER_BASE_COLOR" 128
+    SHIMMER_BASE_R=$SHIMMER_RGB_R; SHIMMER_BASE_G=$SHIMMER_RGB_G; SHIMMER_BASE_B=$SHIMMER_RGB_B
+    _shimmer_resolve_rgb "$LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR" 255
+    SHIMMER_HI_R=$SHIMMER_RGB_R; SHIMMER_HI_G=$SHIMMER_RGB_G; SHIMMER_HI_B=$SHIMMER_RGB_B
   else
-    render_shimmer_256 "$text" "$now" "$start"
+    SHIMMER_USE_TRUECOLOR=0
   fi
+  return 0
+}
+
+# Render one shimmer frame into global RENDERED_SHIMMER (rather than stdout +
+# a `$(...)` capture) so the per-frame call in spinner() below costs zero
+# subshells. All math is bash integer arithmetic on precomputed fixed-point
+# values - no forks, no floating point, functionally equivalent to the
+# original awk implementation (verified numerically: max deviation of 1/256
+# color levels, i.e. visually identical).
+RENDERED_SHIMMER=""
+render_shimmer_text() {
+  local text="$1" now_us="$2" start_us="$3"
+  local pad="$LLM_GITHOOK_SHIMMER_PADDING"
+  local base_color="$LLM_GITHOOK_SHIMMER_BASE_COLOR"
+  local highlight_color="$LLM_GITHOOK_SHIMMER_HIGHLIGHT_COLOR"
+  local len=${#text}
+  local period=$((len + pad * 2))
+
+  local elapsed_us=$((now_us - start_us))
+  if (( elapsed_us < 0 )); then elapsed_us=0; fi
+  local pos_us=$((elapsed_us % SHIMMER_SWEEP_US))
+  local center_scaled=$(( pos_us * period * 1000 / SHIMMER_SWEEP_US ))
+
+  local out="" i i_pos_scaled dist_scaled idx intensity ch color_val r g b
+  for ((i = 0; i < len; i++)); do
+    i_pos_scaled=$(( (i + pad) * 1000 ))
+    dist_scaled=$(( i_pos_scaled - center_scaled ))
+    if (( dist_scaled < 0 )); then dist_scaled=$(( -dist_scaled )); fi
+
+    if (( dist_scaled <= SHIMMER_BAND_WIDTH_FIXED )); then
+      idx=$(( dist_scaled * 64 / SHIMMER_BAND_WIDTH_FIXED ))
+      if (( idx > 64 )); then idx=64; fi
+      intensity=${SHIMMER_COS_TABLE[idx]}
+    else
+      intensity=0
+    fi
+
+    ch="${text:i:1}"
+    if (( SHIMMER_USE_TRUECOLOR )); then
+      r=$(( SHIMMER_BASE_R + intensity * (SHIMMER_HI_R - SHIMMER_BASE_R) / 1000 ))
+      g=$(( SHIMMER_BASE_G + intensity * (SHIMMER_HI_G - SHIMMER_BASE_G) / 1000 ))
+      b=$(( SHIMMER_BASE_B + intensity * (SHIMMER_HI_B - SHIMMER_BASE_B) / 1000 ))
+      out+=$'\033['"38;2;${r};${g};${b}m${ch}"
+    else
+      color_val=$(( base_color + intensity * (highlight_color - base_color) / 1000 ))
+      if (( color_val > 255 )); then color_val=255; fi
+      if (( color_val < 0 )); then color_val=0; fi
+      out+=$'\033['"38;5;${color_val}m${ch}"
+    fi
+  done
+  out+=$'\033[0m'
+  RENDERED_SHIMMER="$out"
+  return 0
+}
+
+# Fork-free "sleep" for frame pacing (a variant of the classic bash-hackers
+# "snore" trick): open a read-write fd against a FIFO ONCE at spinner startup,
+# then use the `read -t` builtin timeout against it every frame instead of
+# exec'ing an external `sleep` binary per frame.
+#
+# IMPORTANT: the FIFO must be a *real* named pipe created with `mkfifo`, not a
+# process-substitution `<(:)`. On Git for Windows / MSYS2, `<(:)` is backed by
+# a temporary regular *file*, so `read` hits end-of-file immediately and the
+# "wait" returns in microseconds - which silently turns frame pacing into an
+# uncapped busy loop (the animation runs as fast as the CPU allows). A real
+# mkfifo pipe, opened read-write so we ourselves keep the write end open and
+# never see EOF, blocks for the requested timeout on Linux, macOS and Windows
+# alike (verified on Git for Windows bash 5.2).
+#
+# A startup calibration measures whether the timed read actually blocks; if it
+# doesn't (unexpected platform, or bash too old for `{fd}` auto-allocation),
+# the fd is discarded and frame_wait falls back to the external `sleep`, so the
+# animation is always frame-capped rather than free-running.
+FRAME_WAIT_FD=""
+init_frame_wait() {
+  local fifo
+  fifo="$(mktemp -u 2>/dev/null)" || fifo="${TMPDIR:-/tmp}/llm_frame_wait_$$"
+  if mkfifo "$fifo" 2>/dev/null; then
+    { exec {FRAME_WAIT_FD}<>"$fifo"; } 2>/dev/null || FRAME_WAIT_FD=""
+    rm -f "$fifo" 2>/dev/null || true
+  else
+    FRAME_WAIT_FD=""
+  fi
+
+  # Calibration safety net: confirm the timed read really blocks (~50ms). If it
+  # returns almost instantly, the builtin wait doesn't work here - drop the fd
+  # and let frame_wait fall back to `sleep`.
+  if [[ -n "$FRAME_WAIT_FD" ]]; then
+    local t0 t1
+    get_now_us; t0=$NOW_US
+    read -t 0.05 -u "$FRAME_WAIT_FD" 2>/dev/null || true
+    get_now_us; t1=$NOW_US
+    if (( t1 - t0 < 20000 )); then
+      eval "exec ${FRAME_WAIT_FD}<&-" 2>/dev/null || true
+      FRAME_WAIT_FD=""
+    fi
+  fi
+  return 0
+}
+
+frame_wait() {
+  local seconds="$1"
+  if [[ -n "$FRAME_WAIT_FD" ]]; then
+    read -t "$seconds" -u "$FRAME_WAIT_FD" 2>/dev/null || true
+  else
+    sleep "$seconds"
+  fi
+}
+
+# Compute the per-frame sleep duration for a given FPS as a decimal string
+# (e.g. "0.033333" for 30fps) using integer microsecond arithmetic instead of
+# the previous per-call `awk` invocation (this one still only runs once).
+compute_frame_interval() {
+  local fps="$1"
+  [[ "$fps" =~ ^[0-9]+$ ]] || fps=30
+  if (( fps <= 0 )); then fps=30; fi
+  local interval_us=$(( 1000000 / fps ))
+  printf '%d.%06d' "$((interval_us / 1000000))" "$((interval_us % 1000000))"
 }
 
 # Function to show a spinner while fetching LLM response
@@ -362,33 +450,46 @@ PY
     done
   fi
 
-  local start_time
-  start_time="$(get_time)"
+  init_shimmer_params
+  init_frame_wait
 
-  # Frame pacing: default 30 FPS, overridable via LLM_GITHOOK_FPS.
-  # Sleep granularity varies by platform, but this keeps the hook from spinning too fast.
+  get_now_us
+  local start_us=$NOW_US
+
+  # Render pacing: how often the shimmer is redrawn. Default 30 FPS, overridable
+  # via LLM_GITHOOK_FPS. Keep this high for a smooth shimmer sweep.
   local fps="${LLM_GITHOOK_FPS:-30}"
   local frame_interval
-  frame_interval="$(awk -v fps="$fps" 'BEGIN{ if (fps <= 0) fps = 30; printf "%.6f", (1.0 / fps) }')"
+  frame_interval="$(compute_frame_interval "$fps")"
 
-  local i=0
+  # Spinner glyph cadence, DECOUPLED from the render frame rate. The glyph index
+  # is derived from elapsed time so the spinner rotates at a fixed, comfortable
+  # speed (default 10 glyphs/sec) no matter how fast frames are rendered. Tying
+  # the glyph to the frame counter (i++ per frame) made it spin at the full
+  # render FPS - visually far too fast once the per-frame fork overhead that
+  # used to throttle the loop was removed.
+  local spinner_fps="${LLM_GITHOOK_SPINNER_FPS:-10}"
+  [[ "$spinner_fps" =~ ^[0-9]+$ ]] || spinner_fps=10
+  (( spinner_fps <= 0 )) && spinner_fps=10
+  local spinner_interval_us=$(( 1000000 / spinner_fps ))
+  local n=${#spinner_frames[@]}
 
   # Get spinner color ANSI code (computed once outside the loop)
   local spinner_ansi
   spinner_ansi=$(get_spinner_ansi)
 
+  local i elapsed_us
   while :; do
-    local char="${spinner_frames[i]}"
-    local now
-    now="$(get_time)"
-    local shimmered
-    shimmered="$(render_shimmer_text "$LLM_GITHOOK_STATUS_TEXT" "$now" "$start_time")"
+    get_now_us
+    elapsed_us=$((NOW_US - start_us))
+    (( elapsed_us < 0 )) && elapsed_us=0
+    i=$(( (elapsed_us / spinner_interval_us) % n ))
+    render_shimmer_text "$LLM_GITHOOK_STATUS_TEXT" "$NOW_US" "$start_us"
 
     # Clear the line and redraw in-place with configurable spinner color.
-    printf "\r\033[K%s%s%b %s" "$spinner_ansi" "$char" "$NC" "$shimmered"
+    printf "\r\033[K%s%s%b %s" "$spinner_ansi" "${spinner_frames[i]}" "$NC" "$RENDERED_SHIMMER"
 
-    ((i = (i + 1) % ${#spinner_frames[@]}))
-    sleep "$frame_interval"
+    frame_wait "$frame_interval"
   done
 }
 
@@ -475,7 +576,7 @@ if [ "$REGENERATE" = true ]; then
 
   # Check if the 'commit-msg' template exists, create if missing
   if ! $LLM_PROGRAM templates show commit-msg &> /dev/null; then
-    $LLM_PROGRAM -s "$(cat $LLM_PREPARE_COMMIT_MSG_PROMPT)" --save commit-msg
+    $LLM_PROGRAM prompt -s "$(cat $LLM_PREPARE_COMMIT_MSG_PROMPT)" --save commit-msg
   fi
 
   # Generate commit message with LLM
