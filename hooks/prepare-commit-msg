@@ -430,11 +430,38 @@ spinner() {
   local spinner_chars=$(get_spinner_chars "$style")
   local -a spinner_frames=()
 
-  # Unicode-safe spinner frames: split into one character per frame when possible.
-  # Bash substring operations are byte-based and will break multi-byte glyphs (e.g., braille dots).
+  # Fast, fork-free split (bash builtins only) so we can paint the very first
+  # frame instantly. This is correct for ASCII styles like the default
+  # "classic"; multi-byte styles (braille, arrows, ...) are refined via python3
+  # further below once the animation is already on screen.
+  local j
+  for ((j = 0; j < ${#spinner_chars}; j++)); do
+    spinner_frames+=("${spinner_chars:j:1}")
+  done
+
+  init_shimmer_params
+
+  get_now_us
+  local start_us=$NOW_US
+
+  # Spinner color ANSI code (computed once).
+  local spinner_ansi
+  spinner_ansi=$(get_spinner_ansi)
+
+  # Paint the first frame RIGHT NOW, before the comparatively slow python3
+  # unicode split and the frame_wait FIFO calibration below. Previously both of
+  # those (python3 startup + a 50ms calibration read) ran before any output,
+  # so the hook appeared to "hang" for ~100ms+ before the animation showed up.
+  render_shimmer_text "$LLM_GITHOOK_STATUS_TEXT" "$NOW_US" "$start_us"
+  printf "\r\033[K%s%s%b %s" "$spinner_ansi" "${spinner_frames[0]}" "$NC" "$RENDERED_SHIMMER"
+
+  # Unicode-safe spinner frames: split into one character per frame when
+  # possible. Bash substring operations are byte-based and will break multi-byte
+  # glyphs (e.g., braille dots), so prefer python3 when available.
   if command -v python3 >/dev/null 2>&1; then
+    local -a _unicode_frames=()
     while IFS= read -r _frame; do
-      spinner_frames+=("$_frame")
+      _unicode_frames+=("$_frame")
     done < <(SPINNER_CHARS="$spinner_chars" python3 - <<'PY'
 import os, sys
 s = os.environ.get("SPINNER_CHARS", "")
@@ -442,19 +469,12 @@ for ch in s:
     sys.stdout.write(ch + "\n")
 PY
     )
-  fi
-  if [ "${#spinner_frames[@]}" -eq 0 ]; then
-    local j
-    for ((j = 0; j < ${#spinner_chars}; j++)); do
-      spinner_frames+=("${spinner_chars:j:1}")
-    done
+    if [ "${#_unicode_frames[@]}" -gt 0 ]; then
+      spinner_frames=("${_unicode_frames[@]}")
+    fi
   fi
 
-  init_shimmer_params
   init_frame_wait
-
-  get_now_us
-  local start_us=$NOW_US
 
   # Render pacing: how often the shimmer is redrawn. Default 30 FPS, overridable
   # via LLM_GITHOOK_FPS. Keep this high for a smooth shimmer sweep.
@@ -473,10 +493,6 @@ PY
   (( spinner_fps <= 0 )) && spinner_fps=10
   local spinner_interval_us=$(( 1000000 / spinner_fps ))
   local n=${#spinner_frames[@]}
-
-  # Get spinner color ANSI code (computed once outside the loop)
-  local spinner_ansi
-  spinner_ansi=$(get_spinner_ansi)
 
   local i elapsed_us
   while :; do
