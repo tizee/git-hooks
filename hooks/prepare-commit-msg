@@ -373,16 +373,16 @@ render_shimmer_text() {
 # never see EOF, blocks for the requested timeout on Linux, macOS and Windows
 # alike (verified on Git for Windows bash 5.2).
 #
-# A startup calibration measures whether the timed read actually blocks; if it
-# doesn't (unexpected platform, or bash too old for `{fd}` auto-allocation),
-# the fd is discarded and frame_wait falls back to the external `sleep`, so the
-# animation is always frame-capped rather than free-running.
+# Dynamic file descriptors and fractional `read -t` require Bash 4.1+. Older
+# Bash versions skip the optimization and use frame_wait's `sleep` fallback.
 FRAME_WAIT_FD=""
 init_frame_wait() {
   local fifo
   fifo="$(mktemp -u 2>/dev/null)" || fifo="${TMPDIR:-/tmp}/llm_frame_wait_$$"
   if mkfifo "$fifo" 2>/dev/null; then
-    { exec {FRAME_WAIT_FD}<>"$fifo"; } 2>/dev/null || FRAME_WAIT_FD=""
+    if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 1) )); then
+      { exec {FRAME_WAIT_FD}<>"$fifo"; } 2>/dev/null || FRAME_WAIT_FD=""
+    fi
     rm -f "$fifo" 2>/dev/null || true
   else
     FRAME_WAIT_FD=""
