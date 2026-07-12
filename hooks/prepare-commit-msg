@@ -430,10 +430,11 @@ spinner() {
   local spinner_chars=$(get_spinner_chars "$style")
   local -a spinner_frames=()
 
-  # Fast, fork-free split (bash builtins only) so we can paint the very first
-  # frame instantly. This is correct for ASCII styles like the default
-  # "classic"; multi-byte styles (braille, arrows, ...) are refined via python3
-  # further below once the animation is already on screen.
+  # Split the spinner glyphs into one frame per character using bash builtins
+  # only (no fork). Bash substring extraction is multi-byte aware whenever the
+  # locale is UTF-8, and this hook forces LC_ALL=en_US.UTF-8 above, so braille
+  # and arrow glyphs split correctly on Linux, macOS (even stock bash 3.2) and
+  # Git for Windows / MSYS2 alike.
   local j
   for ((j = 0; j < ${#spinner_chars}; j++)); do
     spinner_frames+=("${spinner_chars:j:1}")
@@ -448,31 +449,11 @@ spinner() {
   local spinner_ansi
   spinner_ansi=$(get_spinner_ansi)
 
-  # Paint the first frame RIGHT NOW, before the comparatively slow python3
-  # unicode split and the frame_wait FIFO calibration below. Previously both of
-  # those (python3 startup + a 50ms calibration read) ran before any output,
-  # so the hook appeared to "hang" for ~100ms+ before the animation showed up.
+  # Paint the first frame RIGHT NOW, before the frame_wait FIFO calibration
+  # below (a ~50ms blocking read). Otherwise the hook appears to "hang" before
+  # any animation is visible.
   render_shimmer_text "$LLM_GITHOOK_STATUS_TEXT" "$NOW_US" "$start_us"
   printf "\r\033[K%s%s%b %s" "$spinner_ansi" "${spinner_frames[0]}" "$NC" "$RENDERED_SHIMMER"
-
-  # Unicode-safe spinner frames: split into one character per frame when
-  # possible. Bash substring operations are byte-based and will break multi-byte
-  # glyphs (e.g., braille dots), so prefer python3 when available.
-  if command -v python3 >/dev/null 2>&1; then
-    local -a _unicode_frames=()
-    while IFS= read -r _frame; do
-      _unicode_frames+=("$_frame")
-    done < <(SPINNER_CHARS="$spinner_chars" python3 - <<'PY'
-import os, sys
-s = os.environ.get("SPINNER_CHARS", "")
-for ch in s:
-    sys.stdout.write(ch + "\n")
-PY
-    )
-    if [ "${#_unicode_frames[@]}" -gt 0 ]; then
-      spinner_frames=("${_unicode_frames[@]}")
-    fi
-  fi
 
   init_frame_wait
 
