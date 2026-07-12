@@ -25,19 +25,83 @@ patterns=(
   "[0-9]{12}-[0-9]{12}-[0-9]{12}"  # AWS account ID (or other common patterns)
 )
 
-# Check the commit diff for any patterns
-commit_diff=$(git diff --cached)
+# --- Color definitions for terminal output ---
+if [ -t 2 ]; then
+  RED='\033[0;31m'
+  YELLOW='\033[1;33m'
+  CYAN='\033[0;36m'
+  BOLD='\033[1m'
+  DIM='\033[2m'
+  NC='\033[0m'
+else
+  RED='' YELLOW='' CYAN='' BOLD='' DIM='' NC=''
+fi
 
-# Use grep -E for extended regex compatibility (works across systems)
-for pattern in "${patterns[@]}"; do
-  if echo "$commit_diff" | grep -E -q -- "$pattern"; then
-    # If a match is found, reject the commit and notify the user
-    echo "ERROR: Possible credential leak detected!" >&2
-    echo "Pattern match: $pattern" >&2
-    echo "Please remove sensitive information from the commit before proceeding." >&2
-    exit 1
-  fi
-done
+# Human-readable names matching each pattern above
+pattern_names=(
+  "AWS Access Key"
+  "Google API Key"
+  "Stripe Secret Key"
+  "RSA Private Key"
+  "EC Private Key"
+  "Password Assignment"
+  "Token Assignment"
+  "Bearer Token"
+  "Generic Token"
+  "AWS Access Key"
+  "AWS Secret Key"
+  "AWS Account ID"
+)
+
+# Scan staged diff line-by-line to pinpoint leaks with file:line
+current_file=""
+current_line=0
+leak_count=0
+leak_messages=()
+
+while IFS= read -r line; do
+  case "$line" in
+    "diff --git "*)
+      current_file="${line#* b/}"
+      current_line=0
+      ;;
+    "@@"*)
+      new_start=$(echo "$line" | sed -n 's/.*+\([0-9][0-9]*\).*/\1/p')
+      current_line=${new_start:-0}
+      ;;
+    "+"*)
+      content="${line:1}"
+      for i in "${!patterns[@]}"; do
+        if echo "$content" | grep -E -q -- "${patterns[$i]}"; then
+          matched=$(echo "$content" | grep -E -o -- "${patterns[$i]}" | head -1)
+          leak_messages+=("  ${RED}▶${NC} ${CYAN}${current_file}${NC}:${YELLOW}${current_line}${NC}  ${BOLD}[${pattern_names[$i]}]${NC}  ${DIM}${matched}${NC}")
+          ((leak_count++))
+          break  # stop at first matching pattern per line to avoid duplicates
+        fi
+      done
+      ((current_line++))
+      ;;
+    " "*)
+      ((current_line++))
+      ;;
+  esac
+done < <(git diff --cached)
+
+if [ $leak_count -gt 0 ]; then
+  echo "" >&2
+  echo -e "${RED}${BOLD}╔══════════════════════════════════════════════════════════╗${NC}" >&2
+  printf "${RED}${BOLD}║  🔒  CREDENTIAL LEAK DETECTED  —  %d issue(s) found      ║${NC}\n" "$leak_count" >&2
+  echo -e "${RED}${BOLD}╚══════════════════════════════════════════════════════════╝${NC}" >&2
+  echo "" >&2
+  for msg in "${leak_messages[@]}"; do
+    echo -e "$msg" >&2
+  done
+  echo "" >&2
+  echo -e "  ${YELLOW}→${NC} Remove sensitive information before committing." >&2
+  echo -e "  ${DIM}→ Tip: git restore --staged <file> to unstage, edit, and re-add.${NC}" >&2
+  echo "" >&2
+  exit 1
+fi
 
 
 # pre-commit: 自动格式化所有已暂存的 C/C++ 文件
