@@ -53,39 +53,66 @@ pattern_names=(
   "AWS Account ID"
 )
 
-# Scan staged diff line-by-line to pinpoint leaks with file:line
+# Capture the staged diff once; reused for both the fast check and the
+# detailed scan below (avoids running `git diff` twice).
+diff_output=$(git diff --cached)
+
+# Build a single combined regex from all patterns for a fast, one-pass scan.
+combined_pattern=""
+for p in "${patterns[@]}"; do
+  if [ -z "$combined_pattern" ]; then
+    combined_pattern="($p)"
+  else
+    combined_pattern="$combined_pattern|($p)"
+  fi
+done
+
+# Fast path: most commits have no secrets. Do a single grep pass over the
+# added lines (strip the leading '+', skip '+++' file headers). Only when a
+# potential leak is found do we fall back to the slow per-line, per-pattern
+# scan that pinpoints file:line. This keeps the common case to a handful of
+# process spawns instead of one grep per line per pattern.
 current_file=""
 current_line=0
 leak_count=0
 leak_messages=()
 
-while IFS= read -r line; do
-  case "$line" in
-    "diff --git "*)
-      current_file="${line#* b/}"
-      current_line=0
-      ;;
-    "@@"*)
-      new_start=$(echo "$line" | sed -n 's/.*+\([0-9][0-9]*\).*/\1/p')
-      current_line=${new_start:-0}
-      ;;
-    "+"*)
-      content="${line:1}"
-      for i in "${!patterns[@]}"; do
-        if echo "$content" | grep -E -q -- "${patterns[$i]}"; then
-          matched=$(echo "$content" | grep -E -o -- "${patterns[$i]}" | head -1)
-          leak_messages+=("  ${RED}▶${NC} ${CYAN}${current_file}${NC}:${YELLOW}${current_line}${NC}  ${BOLD}[${pattern_names[$i]}]${NC}  ${DIM}${matched}${NC}")
-          ((leak_count++))
-          break  # stop at first matching pattern per line to avoid duplicates
-        fi
-      done
-      ((current_line++))
-      ;;
-    " "*)
-      ((current_line++))
-      ;;
-  esac
-done < <(git diff --cached)
+if printf '%s\n' "$diff_output" \
+    | grep -E '^\+' | grep -v -E '^\+\+\+' | sed 's/^+//' \
+    | grep -E -q -- "$combined_pattern"; then
+
+  # Slow path (rare): pinpoint each leak with file:line context.
+  while IFS= read -r line; do
+    case "$line" in
+      "diff --git "*)
+        current_file="${line#* b/}"
+        current_line=0
+        ;;
+      "@@"*)
+        new_start=$(echo "$line" | sed -n 's/.*+\([0-9][0-9]*\).*/\1/p')
+        current_line=${new_start:-0}
+        ;;
+      "+++"*)
+        # diff header line, not real added content
+        ;;
+      "+"*)
+        content="${line:1}"
+        for i in "${!patterns[@]}"; do
+          if echo "$content" | grep -E -q -- "${patterns[$i]}"; then
+            matched=$(echo "$content" | grep -E -o -- "${patterns[$i]}" | head -1)
+            leak_messages+=("  ${RED}▶${NC} ${CYAN}${current_file}${NC}:${YELLOW}${current_line}${NC}  ${BOLD}[${pattern_names[$i]}]${NC}  ${DIM}${matched}${NC}")
+            ((leak_count++))
+            break  # stop at first matching pattern per line to avoid duplicates
+          fi
+        done
+        ((current_line++))
+        ;;
+      " "*)
+        ((current_line++))
+        ;;
+    esac
+  done < <(printf '%s\n' "$diff_output")
+fi
 
 if [ $leak_count -gt 0 ]; then
   echo "" >&2
