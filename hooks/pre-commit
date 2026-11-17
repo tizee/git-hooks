@@ -53,6 +53,36 @@ pattern_names=(
   "AWS Account ID"
 )
 
+# A match is a candidate, not yet a leak. Three filters drop the false
+# positives seen in practice:
+#   - a line marked `pragma: allowlist secret` (the detect-secrets marker);
+#   - an assignment whose value is a placeholder: `${VAR}`, `$VAR`,
+#     `<value>`, `***`, or a `[REDACTED...]` marker;
+#   - a generic-token match that does not look random: it must mix upper
+#     case, lower case and digits. Separator lines (`-----`), snake_case and
+#     kebab-case identifiers do not; real tokens almost always do.
+# is_false_positive <pattern index> <matched text> <whole line>
+is_false_positive() {
+  local name="${pattern_names[$1]}" matched="$2" content="$3"
+  case "$content" in
+    *"pragma: allowlist secret"*) return 0 ;;
+  esac
+  case "$name" in
+    "Password Assignment"|"Token Assignment")
+      local value="${matched#*=}"
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value:1:${#value}-2}"
+      case "$value" in
+        '${'*|'$'[A-Z_]*|'<'*'>'|'***'*|'[REDACTED'*) return 0 ;;
+      esac
+      ;;
+    "Generic Token")
+      [[ "$matched" =~ [A-Z] && "$matched" =~ [a-z] && "$matched" =~ [0-9] ]] || return 0
+      ;;
+  esac
+  return 1
+}
+
 # Capture the staged diff once; reused for both the fast check and the
 # detailed scan below (avoids running `git diff` twice).
 diff_output=$(git diff --cached)
@@ -100,6 +130,8 @@ if printf '%s\n' "$diff_output" \
         for i in "${!patterns[@]}"; do
           if echo "$content" | grep -E -q -- "${patterns[$i]}"; then
             matched=$(echo "$content" | grep -E -o -- "${patterns[$i]}" | head -1)
+            # A filtered candidate may still match a later pattern.
+            is_false_positive "$i" "$matched" "$content" && continue
             leak_messages+=("  ${RED}▶${NC} ${CYAN}${current_file}${NC}:${YELLOW}${current_line}${NC}  ${BOLD}[${pattern_names[$i]}]${NC}  ${DIM}${matched}${NC}")
             ((leak_count++))
             break  # stop at first matching pattern per line to avoid duplicates

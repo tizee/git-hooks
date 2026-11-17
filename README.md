@@ -9,6 +9,7 @@ A sophisticated collection of git hooks designed to enhance security, code quali
 - **Multi-pattern Recognition**: Supports AWS, Google, Stripe, and generic token formats
 - **C/C++ Auto-formatting**: Automatically formats staged C/C++ files using `clang-format`
 - **Bypass Controls**: Environment variable support for temporary disabling
+- **False-positive filters**: a match blocks only after three checks. A line marked `pragma: allowlist secret` passes. An assignment whose value is a placeholder (`${VAR}`, `$VAR`, `<value>`, `***`, `[REDACTED...]`) passes. A generic-token match must mix upper case, lower case and digits, so separator lines (`-----`), snake_case and kebab-case identifiers pass. `scripts/test-pre-commit.sh` checks real leaks and known false positives.
 
 ### 🤖 AI-Powered Commit Message Generation
 - **LLM Integration**: Uses `llm` CLI tool for intelligent commit message creation
